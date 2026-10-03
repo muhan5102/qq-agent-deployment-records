@@ -1,4 +1,20 @@
+<div align="center">
+
 # QQ 群聊机器人：部署与运维记录
+
+面向 Linux 服务器的 QQ 群聊机器人部署与运维记录：运行环境、运维手册、踩坑记录与人设文本。
+
+[![License](https://img.shields.io/badge/license-MIT-3da639.svg)](LICENSE)
+[![qq-agent-plus](https://img.shields.io/badge/qq--agent--plus-v0.7.7-blue)](https://github.com/sakurawwwxh/qq-agent-plus)
+[![Platform](https://img.shields.io/badge/platform-Linux-0b5fff?logo=linux&logoColor=white)](#运行环境)
+[![Protocol](https://img.shields.io/badge/protocol-OneBot%20v11-12b7f5)](https://github.com/botuniverse/onebot-11)
+[![LLM](https://img.shields.io/badge/LLM-DeepSeek-6b4fbb)](https://platform.deepseek.com)
+[![Last commit](https://img.shields.io/github/last-commit/muhan5102/qq-agent-deployment-records?logo=git&logoColor=white)](https://github.com/muhan5102/qq-agent-deployment-records/commits/main)
+[![Stars](https://img.shields.io/github/stars/muhan5102/qq-agent-deployment-records?label=stars&logo=github)](https://github.com/muhan5102/qq-agent-deployment-records/stargazers)
+
+**简体中文** ｜ [English](README.en.md)
+
+</div>
 
 本仓库记录在一台阿里云轻量应用服务器上部署 QQ 群聊机器人的过程，包括运行环境、
 运维手册、踩坑记录，以及配套的角色扮演人设文本。
@@ -29,6 +45,7 @@
 | 文件 | 说明 |
 |---|---|
 | [README.md](README.md) | 项目概览、运行环境、当前状态与本仓库导航（入口） |
+| [README.en.md](README.en.md) | 本文档的英文版 |
 | [整体流程.md](整体流程.md) | 从部署到运维的完整流程 |
 | [QQ机器人-运维速查.md](QQ机器人-运维速查.md) | 运维手册：常用命令与常见问题处理 |
 | [踩坑总结.md](踩坑总结.md) | 部署与调优过程中遇到的问题、原因与处理方式 |
