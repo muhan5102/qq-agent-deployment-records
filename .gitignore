@@ -1,0 +1,27 @@
+# ===== 绝对不能提交 =====
+# SSH 私钥与连接记录（本机连服务器用）
+.deploy/
+
+# 本地真实值对照表（含服务器 IP、账号号码等，不入库）
+LOCAL-NOTES.md
+
+# 调试过程产生的临时文件（前端脚本、配置快照、抓取结果等）
+work/
+_tmp_*
+
+# ===== 可能含敏感信息的运行产物 =====
+*.env
+secrets.env
+*.key
+*.pem
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# ===== 系统与编辑器 =====
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+.vscode/
+.idea/

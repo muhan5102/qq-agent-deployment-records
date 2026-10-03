@@ -1,0 +1,5 @@
+# 仓库以 LF 存储，避免 Windows 下反复出现换行符转换警告
+* text=auto
+*.md text eol=lf
+*.sh text eol=lf
+*.ps1 text eol=crlf
