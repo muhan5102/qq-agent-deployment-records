@@ -241,11 +241,20 @@ authors and maintainers:
   Hub image path — a different platform from the GitHub repository `SnowLuma/SnowLuma`)
 - [OneBot v11 specification](https://github.com/botuniverse/onebot-11): the protocol used
 - [DeepSeek](https://platform.deepseek.com): chat model service
-- Alibaba Cloud: server and network environment
-- The character "Chihaya Anon" is from *BanG Dream! It's MyGO!!!!!*; copyright belongs to
-  Bushiroad and related rights holders
-- Character reference material: Moegirlpedia and Baidu Baike entries
-- The deployment walkthrough referenced a public tutorial on the Xiaoheihe community (author bbbgd)
+- [Alibaba Cloud](https://cn.aliyun.com/): server and network environment
+- [Node.js](https://nodejs.org/): runtime for the bot
+- [Docker](https://www.docker.com/): container runtime for the protocol side
+- [Ubuntu](https://ubuntu.com/): server operating system (22.04 LTS)
+- The character "Chihaya Anon" is from
+  *[BanG Dream! It's MyGO!!!!!](https://anime.bang-dream.com/mygo/)*
+  ([franchise site](https://bang-dream.com/),
+  [official site of the game *BanG Dream! Our Notes*](https://bdon.biligames.com/));
+  copyright belongs to [Bushiroad](https://en.bushiroad.com/) and related rights holders
+- Character reference material: [Moegirlpedia](https://zh.moegirl.org.cn/%E5%8D%83%E6%97%A9%E7%88%B1%E9%9F%B3)
+  and [Baidu Baike](https://baike.baidu.com/item/%E5%8D%83%E6%97%A9%E7%88%B1%E9%9F%B3) entries
+- The deployment walkthrough referenced a public Xiaoheihe community tutorial,
+  《在自己QQ群里养一个AI群友：qq-agent-plus 保姆级部署教程》 (author bbbgd,
+  [original article](https://www.xiaoheihe.cn/app/bbs/link/43197277b4fa))
 
 This repository records personal practice only and contains no source code or official
 assets from the projects above. See [NOTICE.md](NOTICE.md) for rights and disclaimers.

@@ -21,14 +21,20 @@
 | [SnowLuma](https://github.com/SnowLuma/SnowLuma) | OneBot 协议端框架 | 遵循项目自身声明的许可 |
 | [OneBot v11](https://github.com/botuniverse/onebot-11) | 机器人对接协议规范 | 遵循项目自身声明的许可 |
 | [DeepSeek](https://platform.deepseek.com) | 对话模型服务 | 服务条款归深度求索公司 |
-| 阿里云轻量应用服务器 | 运行环境 | 服务条款归阿里云 |
+| [阿里云轻量应用服务器](https://cn.aliyun.com/product/swas) | 运行环境 | 服务条款归阿里云 |
+| [Node.js](https://nodejs.org/) | 机器人运行时 | MIT 许可，版权归 OpenJS Foundation 及贡献者 |
+| [Docker](https://www.docker.com/) | 协议端容器运行时 | 各组件遵循自身许可，商标归 Docker, Inc. |
+| [Ubuntu](https://ubuntu.com/) | 服务器操作系统 | 系统组件遵循各自开源许可，商标归 Canonical |
 
 此外：
 
-- 角色「千早爱音」出自《BanG Dream! It's MyGO!!!!!》，著作权与商标权归 Bushiroad
-  及相关权利人所有。
-- 设定资料参考自萌娘百科、百度百科对应条目，仅用于核对角色设定。
-- 部署流程参考了小黑盒社区的一篇公开部署教程（作者 bbbgd），在此致谢。
+- 角色「千早爱音」出自《[BanG Dream! It's MyGO!!!!!](https://anime.bang-dream.com/mygo/)》
+  （[系列官网](https://bang-dream.com/)，[官方游戏《BanG Dream! Our Notes》官网](https://bdon.biligames.com/)），
+  著作权与商标权归 [Bushiroad](https://bushiroad.com/) 及相关权利人所有。
+- 设定资料参考自 [萌娘百科](https://zh.moegirl.org.cn/%E5%8D%83%E6%97%A9%E7%88%B1%E9%9F%B3)、
+  [百度百科](https://baike.baidu.com/item/%E5%8D%83%E6%97%A9%E7%88%B1%E9%9F%B3) 对应条目，仅用于核对角色设定。
+- 部署流程参考了小黑盒社区的公开教程《在自己 QQ 群里养一个 AI 群友：qq-agent-plus
+  保姆级部署教程》（作者 bbbgd，[原文链接](https://www.xiaoheihe.cn/app/bbs/link/43197277b4fa)），在此致谢。
 
 本仓库**不包含**上述任何项目的源代码、官方素材或商业资源，仅包含个人撰写的过程记录、
 运维笔记与人设文本。人设文本属于个人非商业性质的二次创作，不用于销售、推广或其他
