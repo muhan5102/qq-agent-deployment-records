@@ -83,7 +83,7 @@
 |---|---|
 | [.gitignore](.gitignore) | 排除本地真实值、SSH 私钥与临时文件 |
 | [.gitattributes](.gitattributes) | 统一换行符（仓库以 LF 存储） |
-| [.github/](.github/) | 平台配置：Issue 表单模板（问题 / 建议） |
+| [.github/](.github/) | 平台配置：Issue 表单模板（问题 / 建议）、PR 模板 |
 
 ### 仅本地，不纳入版本控制
 

@@ -92,7 +92,7 @@ When reading this repository, replace any placeholder in a command (for example
 |---|---|
 | [.gitignore](.gitignore) | Excludes local real values, SSH private keys and temporary files |
 | [.gitattributes](.gitattributes) | Normalises line endings (stored as LF) |
-| [.github/](.github/) | Platform configuration: issue form templates (problem / suggestion) |
+| [.github/](.github/) | Platform configuration: issue form templates (problem / suggestion) and a PR template |
 
 ### Local Only, Not Under Version Control
 
