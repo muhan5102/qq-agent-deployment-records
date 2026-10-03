@@ -17,6 +17,7 @@
 - 运维脚本 [scripts/ops.sh](scripts/ops.sh)（常用命令封装）与
   [scripts/verify-deployment.sh](scripts/verify-deployment.sh)（只读部署自检）
 - 本机工具 [tools/console-tunnel.ps1](tools/console-tunnel.ps1)（SSH 隧道访问控制台）
+- `.github/` 平台配置：Issue 表单模板（问题 / 建议）、PR 模板与联系入口
 
 ### 变更
 

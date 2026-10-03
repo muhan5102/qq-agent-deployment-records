@@ -3,6 +3,3 @@ contact_links:
   - name: 使用交流与开放讨论
     url: https://github.com/muhan5102/qq-agent-deployment-records/discussions
     about: 用法、经验、想法等非问题类内容，请发到 Discussions
-  - name: 安全与敏感信息
-    url: https://github.com/muhan5102/qq-agent-deployment-records/security/advisories/new
-    about: 涉及敏感信息泄露或权利问题，请用私密渠道报告
