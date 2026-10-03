@@ -85,9 +85,9 @@
 - 推送通道：`git push` 直连可用时直接使用；直连不可用时改用 GitHub REST API 重建提交，保持作者、提交时间与提交信息一致。
 - 仓库只记录个人实践，不作为官方文档，也不构成对任何产品或服务的技术担保。
 
-其他人的问题、建议与改动**不受上述约定限制**：可以在 Issue 里提出疑问、错误纠正和改进意见，
-也可以按自己的习惯提交改动。贡献方式与内容边界见 [CONTRIBUTING.md](CONTRIBUTING.md)，
-安全问题与敏感信息的报告方式见 [SECURITY.md](SECURITY.md)。
+其他人的问题、建议与改动**不受上述约定限制**：错误纠正与改进建议可以提到 Issue，
+用法交流与开放讨论可以放在 Discussions，也可以按自己的习惯提交改动。
+贡献方式与内容边界见 [CONTRIBUTING.md](CONTRIBUTING.md)，安全问题与敏感信息的报告方式见 [SECURITY.md](SECURITY.md)。
 
 ## 运行环境
 
