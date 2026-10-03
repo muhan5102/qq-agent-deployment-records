@@ -87,6 +87,8 @@
 
 其他人的问题、建议与改动**不受上述约定限制**：错误纠正与改进建议可以提到 Issue，
 用法交流与开放讨论可以放在 Discussions，也可以按自己的习惯提交改动。
+所有互动请遵守 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)：说明具体文件、版本或复现步骤，
+就事论事、理性表达；重复刷屏、情绪化指责或与主题无关的内容可能被关闭。
 贡献方式与内容边界见 [CONTRIBUTING.md](CONTRIBUTING.md)，安全问题与敏感信息的报告方式见 [SECURITY.md](SECURITY.md)。
 
 ## 运行环境
