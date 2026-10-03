@@ -1,0 +1,49 @@
+name: 问题 / 错误报告
+description: 报告文档错误、命令无效、链接失效等问题
+title: "[问题] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。请尽量把信息填完整，便于核实。
+        **不要粘贴真实的密码、令牌、服务器地址、账号或群号**；确需展示时请先打码。
+  - type: input
+    id: location
+    attributes:
+      label: 涉及的文件与位置
+      description: 文件名 + 章节或行号
+      placeholder: 例如：QQ机器人-运维速查.md 第六节第 2 条
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: 问题描述
+      description: 你看到的现象，以及你认为正确的样子
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 复现步骤或依据
+      description: 按顺序写清怎么复现；若是资料或说法有误，请给出可核对的来源
+      placeholder: |
+        1. 执行 …
+        2. 期望 …，实际 …
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: 环境与版本（可选）
+      description: 例如 qq-agent-plus v0.7.7、Ubuntu 22.04、deepseek-chat
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已确认内容不含真实密码、令牌、服务器地址、账号或群号等敏感信息
+          required: true
+        - label: 若涉及敏感信息泄露或权利问题，我会改用 SECURITY.md 中的私密渠道
+          required: true

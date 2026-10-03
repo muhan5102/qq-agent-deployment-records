@@ -58,6 +58,7 @@ When reading this repository, replace any placeholder in a command (for example
 | [整体流程.md](整体流程.md) | End-to-end flow, from initial deployment to daily operations |
 | [QQ机器人-运维速查.md](QQ机器人-运维速查.md) | Operations manual: common commands and troubleshooting |
 | [踩坑总结.md](踩坑总结.md) | Problems encountered during deployment and tuning, with causes and fixes |
+| [CHANGELOG.md](CHANGELOG.md) | Change log: dated record of documentation and server-side changes |
 
 ### Persona
 
@@ -91,6 +92,7 @@ When reading this repository, replace any placeholder in a command (for example
 |---|---|
 | [.gitignore](.gitignore) | Excludes local real values, SSH private keys and temporary files |
 | [.gitattributes](.gitattributes) | Normalises line endings (stored as LF) |
+| [.github/](.github/) | Platform configuration: issue form templates (problem / suggestion) |
 
 ### Local Only, Not Under Version Control
 
