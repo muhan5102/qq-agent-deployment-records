@@ -6,7 +6,7 @@
 这套环境由以下组件构成：开源项目 [qq-agent-plus](https://github.com/sakurawwwxh/qq-agent-plus)
 作为机器人主体，SnowLuma 容器提供 OneBot 协议端，模型使用 DeepSeek。
 
-**仓库性质**：个人自用记录，与所涉任何公司或项目均无关联，不接受 Pull Request。
+**仓库性质**：个人自用记录，与所涉任何公司或项目均无关联；欢迎通过 Issue 提出问题、错误纠正与改进意见。
 第三方权利归属与致谢见 [NOTICE.md](NOTICE.md)，授权条款见 [LICENSE](LICENSE)。
 
 部署日期：2026-09-21　|　最后更新：2026-10-03
@@ -46,7 +46,7 @@
 |---|---|
 | [NOTICE.md](NOTICE.md) | 仓库性质、第三方权利归属与致谢、合规提示、隐私与免责声明 |
 | [SECURITY.md](SECURITY.md) | 适用版本、部署默认暴露的入口，以及安全问题的报告方式 |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献说明（本仓库不接受外部贡献） |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献说明：欢迎反馈与改动，以及仓库所有者本人的提交约定 |
 | [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | 行为准则 |
 | [LICENSE](LICENSE) | MIT，仅覆盖本仓库自行创作的内容 |
 
@@ -78,10 +78,16 @@
 
 ## 仓库约定
 
+下列约定用于约束**仓库所有者本人的提交**，目的是让署名可追溯、内容不含敏感信息、历史可核对：
+
 - 提交身份统一为 `muhan5102 <258375253+muhan5102@users.noreply.github.com>`，提交使用 SSH 签名，托管平台显示为 Verified。
 - 文档改动流程：本地修改 → 真实值替换为占位符 → 提交前扫描敏感串 → 提交推送。
 - 推送通道：`git push` 直连可用时直接使用；直连不可用时改用 GitHub REST API 重建提交，保持作者、提交时间与提交信息一致。
-- 本仓库为个人记录，不接受外部贡献，详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+- 仓库只记录个人实践，不作为官方文档，也不构成对任何产品或服务的技术担保。
+
+其他人的问题、建议与改动**不受上述约定限制**：可以在 Issue 里提出疑问、错误纠正和改进意见，
+也可以按自己的习惯提交改动。贡献方式与内容边界见 [CONTRIBUTING.md](CONTRIBUTING.md)，
+安全问题与敏感信息的报告方式见 [SECURITY.md](SECURITY.md)。
 
 ## 运行环境
 
