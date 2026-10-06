@@ -164,16 +164,17 @@ Deployment order and the responsibilities of each layer are described in section
 
 ## Current Status
 
-As of 2026-10-03 the bot is **paused**:
+As of 2026-10-06 the bot is **paused**:
 
 | Item | Status |
 |---|---|
 | Program version | `qq-agent-plus` v0.7.7 (upgraded from v0.6.8 on 2026-10-03) |
 | Bot account | `<BOT_QQ>`, registered on 2026-09-21 |
 | Platform restrictions | Function-limited twice (2026-09-22 and 09-23); both restored via identity verification |
+| Account nurturing | Level 6; chats in the group and posts to Qzone every day |
 | Bot service | Stopped (`inactive`); configuration and persona preserved |
 | Protocol container | Running, not logged in |
-| Next step | Reconnect only after the account has been used normally for a while |
+| Next step | Nurtured for 13 days so far; reconnect around 2026-10-14 (three weeks), starting in observe-only mode for 1–2 days before gradually re-enabling replies (see section 6.2 of the operations manual) |
 
 Logging into QQ with a third-party protocol client may be treated as abnormal by the
 platform and can lead to account restrictions. That risk is borne by the person running
