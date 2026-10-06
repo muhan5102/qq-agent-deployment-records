@@ -6,7 +6,7 @@ Deployment and operations notes for a QQ group chat bot on Linux: runtime enviro
 operations manual, troubleshooting notes and persona text.
 
 [![License](https://img.shields.io/badge/license-MIT-3da639.svg)](LICENSE)
-[![qq-agent-plus](https://img.shields.io/badge/qq--agent--plus-v0.7.7-blue)](https://github.com/sakurawwwxh/qq-agent-plus)
+[![qq-agent-plus](https://img.shields.io/badge/qq--agent--plus-v0.7.8-blue)](https://github.com/sakurawwwxh/qq-agent-plus)
 [![Platform](https://img.shields.io/badge/platform-Linux-0b5fff?logo=linux&logoColor=white)](#runtime-environment)
 [![Protocol](https://img.shields.io/badge/protocol-OneBot%20v11-12b7f5)](https://github.com/botuniverse/onebot-11)
 [![LLM](https://img.shields.io/badge/LLM-DeepSeek-6b4fbb)](https://platform.deepseek.com)
@@ -168,7 +168,7 @@ As of 2026-10-06 the bot is **paused**:
 
 | Item | Status |
 |---|---|
-| Program version | `qq-agent-plus` v0.7.7 (upgraded from v0.6.8 on 2026-10-03) |
+| Program version | `qq-agent-plus` v0.7.8 (upgraded on 2026-10-06) |
 | Bot account | `<BOT_QQ>`, registered on 2026-09-21 |
 | Platform restrictions | Function-limited twice (2026-09-22 and 09-23); both restored via identity verification |
 | Account nurturing | Level 6; chats in the group and posts to Qzone every day |

@@ -13,7 +13,7 @@
 | 账号被风控限制了 | 第六节 **第 3 条**（验证解封 + 别立刻重挂） |
 | 想打开控制台 | 第四节 |
 | 改了配置要让生效 | `systemctl --user restart qq-agent-linux` |
-| 配置改错了要回滚 | 第六节 **第 10 条**（有 6 份备份） |
+| 配置改错了要回滚 | 第六节 **第 10 条**（有 8 份备份） |
 | 从本机连服务器 | 第六节 **第 11 条**（SSH 密钥与四个注意点） |
 | **绝对不能做的操作** | 第七节（8 条红线） |
 
@@ -33,7 +33,7 @@
 | 机器人 QQ | <BOT_QQ>（昵称 Chihaya Anon） |
 | 管理员 QQ | <ADMIN_QQ>（机器人告警/审批收件人） |
 
-**当前状态（2026-10-03）**：QQ 账号处于"养号期"，机器人**已停止**——机器人服务 `inactive`（开机自启仍为 `enabled`），协议端容器运行中但未登录。配置与人设全部保留，随时可恢复。程序已于当日由 v0.6.8 升级至 v0.7.7；协议端镜像仍钉在 Docker Hub 的 `motricseven7/snowluma:v1.14.15`（镜像路径，不是 GitHub 仓库）。
+**当前状态（2026-10-06）**：QQ 账号处于"养号期"，机器人**已停止**——机器人服务 `inactive`（开机自启仍为 `enabled`），协议端容器运行中但未登录。配置与人设全部保留，随时可恢复。程序已于 2026-10-06 由 v0.7.7 升级至 v0.7.8；协议端镜像仍钉在 Docker Hub 的 `motricseven7/snowluma:v1.14.15`（镜像路径，不是 GitHub 仓库）。
 
 ---
 
@@ -69,6 +69,8 @@ config.json.bak-pacing      # 调整节奏参数前
 config.json.bak-short       # 缩短话痨前
 config.json.bak-qzoneoff    # 关动态互动前
 config.json.bak-moments     # 改动态发布时间前
+config.json.bak-pre084      # 升级 v0.7.8 前
+config.json.bak-prob60-before  # 响应概率改回 60% 前
 ```
 
 ---
@@ -255,7 +257,7 @@ systemctl --user is-active qq-agent-linux               # 应为 active
 
 **改响应概率要用滑条，不要直接改配置文件里的 `randomPercent`**：
 `contextSliderPos`（滑条位置）是权威字段，`randomPercent` 是它的派生值。程序在启动与升级
-迁移时会按 `contextSliderPos` 重算 `randomPercent`，直接改后者会被覆盖回去（v0.7.7 实测）。
+迁移时会按 `contextSliderPos` 重算 `randomPercent`，直接改后者会被覆盖回去（v0.7.7、v0.7.8 实测）。
 
 **还嫌话多**：概率降到 45～50，思考等待拉到 40 秒。
 **嫌太慢**：思考等待回到 10～15 秒。
