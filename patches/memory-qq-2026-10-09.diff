@@ -1,0 +1,23 @@
+--- a/src/memory/memory-global.js
++++ b/src/memory/memory-global.js
+@@ -194,9 +194,17 @@
+       // 名字与正文都过一遍弱化：印象是持久化后每次运行都注入提示词的，正文里若带着
+       // 【安全规则】这类段头（模型转述、工具结果带进来的），必须在这里再挡一次。
+       let who = sanitizeUserText(notes[m.userId] || m.name || m.userId || '某人');
+-      // 说的是管理员本人就要点明：否则模型读到"他自称管理员、要改人设"这类印象时，
+-      // 不知道说的是自己的设置者，容易当成外人来试探它。
+-      if (ownerUin && String(m.userId) === ownerUin) who += `（QQ ${ownerUin}，就是管理员本人）`;
++      // 认人以 QQ 号为准：昵称只是一个称呼——可能重名（群里就有别的号用了相似的名字），
++      // 也可能整句都是一句会误导的话。显示层也把号带上，模型才能把看到的名字
++      // 和记忆/工具结果里的 QQ 号对上（2026-10-09 用户要求）。who 本身就是号时不重复拼。
++      const uid = String(m.userId || '').trim();
++      if (ownerUin && uid === ownerUin) {
++        // 说的是管理员本人就要点明：否则模型读到"他自称管理员、要改人设"这类印象时，
++        // 不知道说的是自己的设置者，容易当成外人来试探它。
++        who += `（QQ ${ownerUin}，就是管理员本人）`;
++      } else if (uid && uid !== who && !who.includes(uid)) {
++        who += `(QQ ${uid})`;
++      }
+       const recent = [...m.impressions].sort((a, b) => (b.lastObservedAt || b.createdAt) - (a.lastObservedAt || a.createdAt)).slice(0, 3).reverse();
+       // 带上日期：模型才能判断"这是昨天还是两周前"，别把过期印象当现状用。
+       // 今年的省掉年份（[09-20]），往年的必须带年份（[2025-12-20]）——

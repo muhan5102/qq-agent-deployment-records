@@ -1,6 +1,6 @@
 # 安全政策
 
-最后更新：2026-10-03
+最后更新：2026-10-09
 
 ## 适用版本
 
@@ -8,8 +8,8 @@
 
 | 组件 | 版本 |
 |---|---|
-| qq-agent-plus | v0.7.8 |
-| SnowLuma 镜像 | `motricseven7/snowluma:v1.14.15` |
+| qq-agent-plus | v0.8.1 |
+| SnowLuma 镜像 | `motricseven7/snowluma:v1.14.22` |
 | 操作系统 | Ubuntu 22.04 LTS |
 
 ## 这套部署默认暴露哪些东西

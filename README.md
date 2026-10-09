@@ -5,7 +5,7 @@
 面向 Linux 服务器的 QQ 群聊机器人部署与运维记录：运行环境、运维手册、踩坑记录与人设文本。
 
 [![License](https://img.shields.io/badge/license-MIT-3da639.svg)](LICENSE)
-[![qq-agent-plus](https://img.shields.io/badge/qq--agent--plus-v0.7.8-blue)](https://github.com/sakurawwwxh/qq-agent-plus)
+[![qq-agent-plus](https://img.shields.io/badge/qq--agent--plus-v0.8.1-blue)](https://github.com/sakurawwwxh/qq-agent-plus)
 [![Platform](https://img.shields.io/badge/platform-Linux-0b5fff?logo=linux&logoColor=white)](#运行环境)
 [![Protocol](https://img.shields.io/badge/protocol-OneBot%20v11-12b7f5)](https://github.com/botuniverse/onebot-11)
 [![LLM](https://img.shields.io/badge/LLM-DeepSeek-6b4fbb)](https://platform.deepseek.com)
@@ -76,6 +76,7 @@
 | [scripts/verify-deployment.sh](scripts/verify-deployment.sh) | 只读部署自检，输出通过 / 注意 / 失败计数 |
 | [scripts/README.md](scripts/README.md) | 脚本用法与安全边界 |
 | [tools/console-tunnel.ps1](tools/console-tunnel.ps1) | 本机通过 SSH 隧道访问控制台，避免把 3210 暴露到公网 |
+| [patches/](patches/) | 服务器侧代码补丁：对上游 app 的小改动，含用途说明与打/回退方法 |
 
 ### 仓库配置
 
@@ -142,22 +143,25 @@ QQ 群  ⇄  SnowLuma 容器（OneBot 协议端）
 
 ## 当前状态
 
-截至 2026-10-06，机器人处于**暂停状态**：
+截至 2026-10-09，机器人**已重新接入，处于「只看不说」的观察期**：
 
 | 项目 | 状态 |
 |---|---|
-| 程序版本 | `qq-agent-plus` v0.7.8（2026-10-06 升级） |
+| 程序版本 | `qq-agent-plus` v0.8.1（2026-10-09 升级） |
+| 协议端 | `motricseven7/snowluma:v1.14.22`（2026-10-09 升级） |
 | 机器人账号 | `<BOT_QQ>`，注册于 2026-09-21 |
 | 风控记录 | 2026-09-22、09-23 两次被平台限制功能，均通过身份验证恢复 |
-| 养号进度 | 账号等级 6 级；每天在群内聊天并发布空间动态 |
-| 机器人服务 | 已停止（`inactive`），配置与人设保留 |
-| 协议端容器 | 运行中，未登录 |
-| 后续计划 | 已养号 13 天；计划满 3 周（约 2026-10-14）后重新接入，先以「只看不说」观察 1~2 天再逐步放开；流程见运维手册第六节第 2 条 |
+| 机器人服务 | 运行中（`active`），运行模式 `observe` |
+| 协议端容器 | 运行中，**已登录**（2026-10-09 扫码） |
+| 后续计划 | 先观察 1~2 天，再决定是否放开被动回复；流程见运维手册第六节第 2 条 |
 
 使用第三方协议端登录 QQ 可能被平台判定为异常，进而限制账号功能。该风险由部署者
 自行承担。相关内容见 NOTICE.md 的「风险与合规提示」。
 
-## 恢复流程
+## 断线重连 / 重新扫码流程
+
+> ⚠️ 只有**登录态掉线**时才需要走这套。平时不要执行第 1 步里的容器重启——那会注销登录，
+> 必须重新扫码才能恢复。
 
 ```bash
 # 1. 启动机器人服务与协议端容器
@@ -180,14 +184,17 @@ curl -sS -m 10 -H "authorization: Bearer $T" -H 'content-type: application/json'
 | 项目 | 值 |
 |---|---|
 | 模型与温度 | `deepseek-chat`，温度 1.3 |
-| 人设 | 角色卡约 5.3 千字，附加规则约 1 千字 |
-| 交流策略 / 参与度 | `legacy`（原版群友）/ high |
+| 人设 | 角色卡约 5.6 千字，附加规则约 1.4 千字 |
+| 交流策略 / 参与度 | `legacy`（原版群友）/ medium |
 | 响应概率 | 60%（被 @ 必回） |
-| 消息节奏 | 思考等待 15～28 秒，分条间隔 2.5～7 秒，单轮通常 1 条、最多 2 条 |
+| 消息节奏 | 思考等待 15～20 秒，分条间隔 2.5～7 秒，单轮通常 1 条、最多 2 条 |
+| 发送闸门 | 每分钟 15 条 / 每小时 180 条（防模型抽风，平时碰不到） |
+| 自主节奏 `pacing` | 开启（群聊：默认 6 分钟醒一次、最短 3 分钟；被 @ 仍即时） |
 | 对话模式 | `threaded`（参与者续接） |
-| 时间控制 | 启用（全天），夜间由人设规则约束 |
-| 每日动态 | 开启，20:00～23:30 区间内随机发布 1 条 |
-| 动态互动 / 主动加好友 | 关闭 |
+| 时间控制 | 启用（模式 `always`，全天开放），夜间由人设规则约束 |
+| 每日动态 / 动态互动 | **关闭** |
+| 主动找话 | 冷场开话题 关闭；补话 关闭；自唤醒 保留 |
+| 成员认知 | 印象行带 QQ 号（服务器侧本地补丁，见运维手册第三节） |
 | 表情自动收藏 | 开启（每小时不超过 10 张） |
 | 白名单 | 群 `<GROUP_ID>`（1 个）；私聊为管理员 `<ADMIN_QQ>` 与一个测试账号（2 个） |
 

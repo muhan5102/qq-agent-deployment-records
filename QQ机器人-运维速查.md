@@ -33,7 +33,10 @@
 | 机器人 QQ | <BOT_QQ>（昵称 Chihaya Anon） |
 | 管理员 QQ | <ADMIN_QQ>（机器人告警/审批收件人） |
 
-**当前状态（2026-10-06）**：QQ 账号处于"养号期"，机器人**已停止**——机器人服务 `inactive`（开机自启仍为 `enabled`），协议端容器运行中但未登录。配置与人设全部保留，随时可恢复。程序已于 2026-10-06 由 v0.7.7 升级至 v0.7.8；协议端镜像仍钉在 Docker Hub 的 `motricseven7/snowluma:v1.14.15`（镜像路径，不是 GitHub 仓库）。
+**当前状态（2026-10-09）**：机器人**已重新接入，处于「只看不说」的观察期**——服务 `active`、
+运行模式 `observe`；协议端容器运行中且**已登录**（2026-10-09 扫码）。程序已于 2026-10-09 由
+v0.7.8 升级至 **v0.8.1**，协议端镜像由 v1.14.15 升级至 **`motricseven7/snowluma:v1.14.22`**
+（镜像路径，不是 GitHub 仓库）。每日动态、动态互动、补话均已关闭；自主节奏 `pacing` 已开启。
 
 ---
 
@@ -60,18 +63,52 @@
 | 项目源码 | `/home/admin/qq-agent-plus` |
 | Node 运行时 | `/mnt/data/qq-agent/app/.runtime/node-v22.23.2-linux-x64/bin/node` |
 
-**配置备份**（都在 `/mnt/data/qq-agent/data/`）：
+**配置备份**（都在 `/mnt/data/qq-agent/data/`，共 14 份）：
 
 ```
-config.json.bak-friendoff   # 改好友功能前
-config.json.bak-prob0       # 好友抽签概率设 0 前
-config.json.bak-pacing      # 调整节奏参数前
-config.json.bak-short       # 缩短话痨前
-config.json.bak-qzoneoff    # 关动态互动前
-config.json.bak-moments     # 改动态发布时间前
-config.json.bak-pre084      # 升级 v0.7.8 前
-config.json.bak-prob60-before  # 响应概率改回 60% 前
+config.json.bak-friendoff        # 改好友功能前
+config.json.bak-prob0            # 好友抽签概率设 0 前
+config.json.bak-pacing           # 调整节奏参数前（2026-09）
+config.json.bak-short            # 缩短话痨前
+config.json.bak-qzoneoff         # 关动态互动前
+config.json.bak-moments          # 改动态发布时间前
+config.json.bak-pre084           # 升级 v0.7.8 前
+config.json.bak-prob60-before    # 响应概率改回 60% 前
+config.json.bak-pre081           # 升级 v0.8.1 前
+config.json.bak-moments-off      # 关每日动态前
+config.json.bak-followup-off     # 关补话前
+config.json.bak-pacing-sendlimit # 开 pacing 并收紧发送闸门（10/120）前
+config.json.bak-sendlimit-hi     # 发送闸门放回 15/180 前
+config.json.bak-zjsn             # 人设里 zjsn 改回"这缩写"前
 ```
+
+> 回滚用 `cp config.json.bak-<名字> config.json`，然后重启服务才生效
+> （控制台改配置是即时生效的，直接改文件才需要重启）。
+
+**本地代码补丁（升级会被覆盖，务必留意）**
+
+`app/src/memory/memory-global.js` 打过一个补丁：让「对群友的全局印象」那几行在昵称后带上
+QQ 号，认人以号为准（本机昵称可能是"你已被移出群聊"这类会误导的串，群里还有别的号用了
+带"爱音"的名字）。
+
+| 项 | 路径 |
+|---|---|
+| 补丁文件 | `/mnt/data/qq-agent/patch-memory-qq-2026-10-09.diff` |
+| 改前原件 | `app/src/memory/memory-global.js.bak-20261009` |
+| 仓库内副本 | [patches/memory-qq-2026-10-09.diff](patches/memory-qq-2026-10-09.diff)（用途与打/回退步骤见同目录说明） |
+
+跑过 `deploy-all.sh` 升级之后要重新打一次：
+
+```bash
+cd /mnt/data/qq-agent/app && patch -p1 < /mnt/data/qq-agent/patch-memory-qq-2026-10-09.diff
+./.runtime/node-v22.23.2-linux-x64/bin/node --check src/memory/memory-global.js
+systemctl --user restart qq-agent-linux
+```
+
+> 上游若动过同一个文件，`patch` 会报 hunk failed——那种情况手工重做，不要硬打。
+
+**运行模式的位置**：v0.8.x 起 `runtime.mode` 在配置的 `runtime` 段（旧版写在 `server` 段）。
+直接改配置文件时要认这个位置；用控制台改则不用管。
 
 ---
 
