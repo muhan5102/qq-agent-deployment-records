@@ -6,7 +6,7 @@ Deployment and operations notes for a QQ group chat bot on Linux: runtime enviro
 operations manual, troubleshooting notes and persona text.
 
 [![License](https://img.shields.io/badge/license-MIT-3da639.svg)](LICENSE)
-[![qq-agent-plus](https://img.shields.io/badge/qq--agent--plus-v0.7.8-blue)](https://github.com/sakurawwwxh/qq-agent-plus)
+[![qq-agent-plus](https://img.shields.io/badge/qq--agent--plus-v0.8.1-blue)](https://github.com/sakurawwwxh/qq-agent-plus)
 [![Platform](https://img.shields.io/badge/platform-Linux-0b5fff?logo=linux&logoColor=white)](#runtime-environment)
 [![Protocol](https://img.shields.io/badge/protocol-OneBot%20v11-12b7f5)](https://github.com/botuniverse/onebot-11)
 [![LLM](https://img.shields.io/badge/LLM-DeepSeek-6b4fbb)](https://platform.deepseek.com)
@@ -85,6 +85,7 @@ When reading this repository, replace any placeholder in a command (for example
 | [scripts/verify-deployment.sh](scripts/verify-deployment.sh) | Read-only deployment self-check with pass / warn / fail counts |
 | [scripts/README.md](scripts/README.md) | Script usage and safety boundaries |
 | [tools/console-tunnel.ps1](tools/console-tunnel.ps1) | Access the console from a local machine over an SSH tunnel, so port 3210 need not be public |
+| [patches/](patches/) | Server-side code patches: small changes to the upstream app, with purpose and apply/rollback steps |
 
 ### Repository Configuration
 
@@ -164,23 +165,26 @@ Deployment order and the responsibilities of each layer are described in section
 
 ## Current Status
 
-As of 2026-10-06 the bot is **paused**:
+As of 2026-10-09 the bot has been **reconnected and is in an observe-only period**:
 
 | Item | Status |
 |---|---|
-| Program version | `qq-agent-plus` v0.7.8 (upgraded on 2026-10-06) |
+| Program version | `qq-agent-plus` v0.8.1 (upgraded on 2026-10-09) |
+| Protocol client | `motricseven7/snowluma:v1.14.22` (upgraded on 2026-10-09) |
 | Bot account | `<BOT_QQ>`, registered on 2026-09-21 |
 | Platform restrictions | Function-limited twice (2026-09-22 and 09-23); both restored via identity verification |
-| Account nurturing | Level 6; chats in the group and posts to Qzone every day |
-| Bot service | Stopped (`inactive`); configuration and persona preserved |
-| Protocol container | Running, not logged in |
-| Next step | Nurtured for 13 days so far; reconnect around 2026-10-14 (three weeks), starting in observe-only mode for 1–2 days before gradually re-enabling replies (see section 6.2 of the operations manual) |
+| Bot service | Running (`active`), runtime mode `observe` |
+| Protocol container | Running, **logged in** (QR scan on 2026-10-09) |
+| Next step | Observe for 1–2 days first, then decide whether to re-enable passive replies (see section 6.2 of the operations manual) |
 
 Logging into QQ with a third-party protocol client may be treated as abnormal by the
 platform and can lead to account restrictions. That risk is borne by the person running
 it. See the "Risk and compliance" section of NOTICE.md.
 
-## Recovery Procedure
+## Reconnect / Re-scan Procedure
+
+> ⚠️ Only needed when the **login state is lost**. Do not run the container restart in step 1
+> as part of normal operation — it logs the account out and a new QR scan becomes mandatory.
 
 ```bash
 # 1. Start the bot service and the protocol container
@@ -205,14 +209,17 @@ For intermediate checks and error handling, see section 6 of the
 | Item | Value |
 |---|---|
 | Model and temperature | `deepseek-chat`, temperature 1.3 |
-| Persona | Role card ≈ 5.3k characters, additional rules ≈ 1k characters |
-| Behaviour profile / participation | `legacy` (original group-member style) / high |
+| Persona | Role card ≈ 5.6k characters, additional rules ≈ 1.4k characters |
+| Behaviour profile / participation | `legacy` (original group-member style) / medium |
 | Response probability | 60% (always replies when mentioned) |
-| Message pacing | Thinking delay 15–28 s, 2.5–7 s between split messages, usually 1 message per turn, at most 2 |
+| Message pacing | Thinking delay 15–20 s, 2.5–7 s between split messages, usually 1 message per turn, at most 2 |
+| Send throttle | 15 messages/minute and 180 messages/hour (a guard against runaway output; normal chat never reaches it) |
+| Autonomous pacing `pacing` | Enabled (group chats: wakes about every 6 minutes, minimum 3; mentions are still handled immediately) |
 | Conversation mode | `threaded` (participant continuation) |
-| Time control | Enabled (all day); night-time behaviour is constrained by the persona rules |
-| Daily moments | Enabled, 1 post at a random time between 20:00 and 23:30 |
-| Qzone interactions / proactive friend requests | Disabled |
+| Time control | Enabled (`always`); night-time behaviour is constrained by the persona rules |
+| Daily moments / Qzone interactions | **Disabled** |
+| Self-initiated talk | Cold-start topics off; follow-up off; self-scheduled wake-up kept |
+| Member recognition | Impression lines carry the QQ number (local server-side patch; see section 3 of the operations manual) |
 | Sticker auto-collection | Enabled (at most 10 per hour) |
 | Allowlist | Group `<GROUP_ID>` (one); private chats: the administrator `<ADMIN_QQ>` and one test account (two) |
 
