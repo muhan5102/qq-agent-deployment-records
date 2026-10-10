@@ -33,10 +33,11 @@
 | 机器人 QQ | <BOT_QQ>（昵称 Chihaya Anon） |
 | 管理员 QQ | <ADMIN_QQ>（机器人告警/审批收件人） |
 
-**当前状态（2026-10-09）**：机器人**已重新接入，处于「只看不说」的观察期**——服务 `active`、
-运行模式 `observe`；协议端容器运行中且**已登录**（2026-10-09 扫码）。程序已于 2026-10-09 由
-v0.7.8 升级至 **v0.8.1**，协议端镜像由 v1.14.15 升级至 **`motricseven7/snowluma:v1.14.22`**
-（镜像路径，不是 GitHub 仓库）。每日动态、动态互动、补话均已关闭；自主节奏 `pacing` 已开启。
+**当前状态（2026-10-10）**：机器人**已重新接入，处于「只看不说」的观察期**——服务 `active`、
+运行模式 `observe`；协议端容器运行中且**已登录**（2026-10-09 扫码，之后没重启过容器）。程序已于
+2026-10-10 由 v0.8.1 升级至 **v0.8.3**（协议端镜像仍是 **`motricseven7/snowluma:v1.14.22`**，
+与上游基线一致，所以升级时"随版本对齐协议端"是 no-op）。每日动态、动态互动、补话均已关闭；
+自主节奏 `pacing` 已开启；`admin` 已加入 `docker` 组（见第三节）。
 
 ---
 
@@ -63,7 +64,7 @@ v0.7.8 升级至 **v0.8.1**，协议端镜像由 v1.14.15 升级至 **`motricsev
 | 项目源码 | `/home/admin/qq-agent-plus` |
 | Node 运行时 | `/mnt/data/qq-agent/app/.runtime/node-v22.23.2-linux-x64/bin/node` |
 
-**配置备份**（都在 `/mnt/data/qq-agent/data/`，共 14 份）：
+**配置备份**（都在 `/mnt/data/qq-agent/data/`，共 15 份）：
 
 ```
 config.json.bak-friendoff        # 改好友功能前
@@ -80,6 +81,7 @@ config.json.bak-followup-off     # 关补话前
 config.json.bak-pacing-sendlimit # 开 pacing 并收紧发送闸门（10/120）前
 config.json.bak-sendlimit-hi     # 发送闸门放回 15/180 前
 config.json.bak-zjsn             # 人设里 zjsn 改回"这缩写"前
+config.json.bak-pre083           # 升级 v0.8.3 前
 ```
 
 > 回滚用 `cp config.json.bak-<名字> config.json`，然后重启服务才生效
@@ -87,15 +89,19 @@ config.json.bak-zjsn             # 人设里 zjsn 改回"这缩写"前
 
 **本地代码补丁（升级会被覆盖，务必留意）**
 
-`app/src/memory/memory-global.js` 打过一个补丁：让「对群友的全局印象」那几行在昵称后带上
-QQ 号，认人以号为准（本机昵称可能是"你已被移出群聊"这类会误导的串，群里还有别的号用了
-带"爱音"的名字）。
+目前有两个补丁，完整用途与打/回退步骤见仓库 [patches/README.md](patches/README.md)：
 
-| 项 | 路径 |
-|---|---|
-| 补丁文件 | `/mnt/data/qq-agent/patch-memory-qq-2026-10-09.diff` |
-| 改前原件 | `app/src/memory/memory-global.js.bak-20261009` |
-| 仓库内副本 | [patches/memory-qq-2026-10-09.diff](patches/memory-qq-2026-10-09.diff)（用途与打/回退步骤见同目录说明） |
+| 补丁 | 改了什么 | 改前原件（服务器） |
+|---|---|---|
+| `memory-qq-2026-10-09` | 记忆印象行在昵称后带上 QQ 号，认人以号为准 | `app/src/memory/memory-global.js.bak-20261009` |
+| `sticker-collect-criteria-2026-10-10` | 收藏判定改成"两条都要过"并做成配置项 `sticker.collectCriteria` | `app/src/onebot/sticker-manager.js.bak-20261010`、`app/src/core/config-legacy.js.bak-20261010` |
+
+> 2026-10-10 升级到 v0.8.3 时，`deploy.sh` 的 `rsync --delete` 会把 `src/` 整个换掉，两个补丁
+> 都被覆盖 —— 已按上表重打，并另存了 v0.8.3 的原件为 `*.bak-20261010b`（重打失败时可回退）。
+> memory 补丁在 v0.8.3 上是 **17 行偏移**（`patch` 会自动对齐并提示，属正常）。
+
+> 收藏判定标准**平时不用改代码**：`sticker.collectCriteria` 填一段"收什么 / 不收什么"就即时生效
+> （留空 = 用内置默认）。只有改代码逻辑时才需要走下面的打补丁流程。
 
 跑过 `deploy-all.sh` 升级之后要重新打一次：
 
@@ -109,6 +115,20 @@ systemctl --user restart qq-agent-linux
 
 **运行模式的位置**：v0.8.x 起 `runtime.mode` 在配置的 `runtime` 段（旧版写在 `server` 段）。
 直接改配置文件时要认这个位置；用控制台改则不用管。
+
+**docker 组（2026-10-10 起）**：`admin` 已加入 `docker` 组。
+
+这是上游 v0.8.2 起部署脚本的"自愈"步骤，目的是让控制台的「更新协议端」按钮可用（Issue #30：
+服务进程的补充组在 user manager 启动那一刻冻结，事后 `usermod` 对已运行的进程无效）。升级时
+脚本会加组并**重建 user manager**（`stop → sleep 3 → start`，实测不能用 `restart`），期间
+`admin` 名下所有用户服务会停约 10 秒再自动恢复。
+
+代价照上游文档：docker 组等于 root 等价权限。本机原本就配了 `admin` 的免密 sudo，所以**实际
+权限级别没有变化**。不想保留可以撤销：
+
+```bash
+sudo gpasswd -d admin docker    # 撤销后控制台「更新协议端」会报权限不足，协议端升级要手工 ssh
+```
 
 ---
 

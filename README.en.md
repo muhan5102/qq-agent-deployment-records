@@ -6,7 +6,7 @@ Deployment and operations notes for a QQ group chat bot on Linux: runtime enviro
 operations manual, troubleshooting notes and persona text.
 
 [![License](https://img.shields.io/badge/license-MIT-3da639.svg)](LICENSE)
-[![qq-agent-plus](https://img.shields.io/badge/qq--agent--plus-v0.8.1-blue)](https://github.com/sakurawwwxh/qq-agent-plus)
+[![qq-agent-plus](https://img.shields.io/badge/qq--agent--plus-v0.8.3-blue)](https://github.com/sakurawwwxh/qq-agent-plus)
 [![Platform](https://img.shields.io/badge/platform-Linux-0b5fff?logo=linux&logoColor=white)](#runtime-environment)
 [![Protocol](https://img.shields.io/badge/protocol-OneBot%20v11-12b7f5)](https://github.com/botuniverse/onebot-11)
 [![LLM](https://img.shields.io/badge/LLM-DeepSeek-6b4fbb)](https://platform.deepseek.com)
@@ -169,7 +169,7 @@ As of 2026-10-09 the bot has been **reconnected and is in an observe-only period
 
 | Item | Status |
 |---|---|
-| Program version | `qq-agent-plus` v0.8.1 (upgraded on 2026-10-09) |
+| Program version | `qq-agent-plus` v0.8.3 (upgraded on 2026-10-10) |
 | Protocol client | `motricseven7/snowluma:v1.14.22` (upgraded on 2026-10-09) |
 | Bot account | `<BOT_QQ>`, registered on 2026-09-21 |
 | Platform restrictions | Function-limited twice (2026-09-22 and 09-23); both restored via identity verification |
