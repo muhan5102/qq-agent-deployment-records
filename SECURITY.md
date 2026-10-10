@@ -8,7 +8,7 @@
 
 | 组件 | 版本 |
 |---|---|
-| qq-agent-plus | v0.8.1 |
+| qq-agent-plus | v0.8.3 |
 | SnowLuma 镜像 | `motricseven7/snowluma:v1.14.22` |
 | 操作系统 | Ubuntu 22.04 LTS |
 
