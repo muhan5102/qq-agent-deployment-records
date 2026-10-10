@@ -47,6 +47,15 @@
 - 注意：观察期并非零动作——贴纸自动收藏一直在跑（16 小时判定 10 次、入库 5 张），它会写入
   账号的 QQ 收藏表情，并产生模型调用
 
+### 上游
+
+- 向上游提 PR：[sakurawwwxh/qq-agent-plus#31](https://github.com/sakurawwwxh/qq-agent-plus/pull/31)
+  「表情收藏的判定标准改为可配置（`sticker.collectCriteria`）」——**当日已由维护者合入 main**
+  （合并提交 `1f8bad2a`；CI 的 lint 与 test 全绿；6 个文件内容零改动，提交带 SSH 签名显示 Verified）
+- 影响：**下一个含该改动的上游版本起，本仓库的收藏判定补丁可以退役**——升级后先把本部署要用的
+  标准写进 `sticker.collectCriteria`（上游默认文案是原版那套，不填就回到默认），再删补丁；
+  退役步骤见 [patches/README.md](patches/README.md)
+
 ## 2026-10-09
 
 ### 变更

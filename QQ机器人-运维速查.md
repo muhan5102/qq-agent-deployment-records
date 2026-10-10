@@ -99,6 +99,11 @@ config.json.bak-pre083           # 升级 v0.8.3 前
 > 2026-10-10 升级到 v0.8.3 时，`deploy.sh` 的 `rsync --delete` 会把 `src/` 整个换掉，两个补丁
 > 都被覆盖 —— 已按上表重打，并另存了 v0.8.3 的原件为 `*.bak-20261010b`（重打失败时可回退）。
 > memory 补丁在 v0.8.3 上是 **17 行偏移**（`patch` 会自动对齐并提示，属正常）。
+>
+> `sticker-collect-criteria` 这条**上游已合入同类能力**（PR #31，合并提交 `1f8bad2a`）：
+> **下一个含该改动的上游版本起可以退役**。退役时注意先把本部署的标准写进
+> `sticker.collectCriteria`（上游默认文案是原版那套，不填会回到默认），步骤见
+> [patches/README.md](patches/README.md)。
 
 > 收藏判定标准**平时不用改代码**：`sticker.collectCriteria` 填一段"收什么 / 不收什么"就即时生效
 > （留空 = 用内置默认）。只有改代码逻辑时才需要走下面的打补丁流程。
