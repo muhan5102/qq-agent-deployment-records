@@ -5,7 +5,7 @@
 面向 Linux 服务器的 QQ 群聊机器人部署与运维记录：运行环境、运维手册、踩坑记录与人设文本。
 
 [![License](https://img.shields.io/badge/license-MIT-3da639.svg)](LICENSE)
-[![qq-agent-plus](https://img.shields.io/badge/qq--agent--plus-v0.8.3-blue)](https://github.com/sakurawwwxh/qq-agent-plus)
+[![qq-agent-plus](https://img.shields.io/badge/qq--agent--plus-v0.8.4-blue)](https://github.com/sakurawwwxh/qq-agent-plus)
 [![Platform](https://img.shields.io/badge/platform-Linux-0b5fff?logo=linux&logoColor=white)](#运行环境)
 [![Protocol](https://img.shields.io/badge/protocol-OneBot%20v11-12b7f5)](https://github.com/botuniverse/onebot-11)
 [![LLM](https://img.shields.io/badge/LLM-DeepSeek-6b4fbb)](https://platform.deepseek.com)
@@ -147,7 +147,7 @@ QQ 群  ⇄  SnowLuma 容器（OneBot 协议端）
 
 | 项目 | 状态 |
 |---|---|
-| 程序版本 | `qq-agent-plus` v0.8.3（2026-10-10 升级） |
+| 程序版本 | `qq-agent-plus` v0.8.4（2026-10-10 升级） |
 | 协议端 | `motricseven7/snowluma:v1.14.22`（2026-10-09 升级） |
 | 机器人账号 | `<BOT_QQ>`，注册于 2026-09-21 |
 | 风控记录 | 2026-09-22、09-23 两次被平台限制功能，均通过身份验证恢复 |
@@ -195,7 +195,7 @@ curl -sS -m 10 -H "authorization: Bearer $T" -H 'content-type: application/json'
 | 每日动态 / 动态互动 | **关闭** |
 | 主动找话 | 冷场开话题 关闭；补话 关闭；自唤醒 保留 |
 | 成员认知 | 印象行带 QQ 号（服务器侧本地补丁，见运维手册第三节） |
-| 表情自动收藏 | 开启（每小时不超过 10 张） |
+| 表情自动收藏 | 开启（每小时不超过 10 张）；判定标准自定义（`sticker.collectCriteria`，内容见 [patches/README.md](patches/README.md)） |
 | 白名单 | 群 `<GROUP_ID>`（1 个）；私聊为管理员 `<ADMIN_QQ>` 与一个测试账号（2 个） |
 
 ## 操作注意事项

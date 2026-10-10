@@ -64,7 +64,7 @@
 | 项目源码 | `/home/admin/qq-agent-plus` |
 | Node 运行时 | `/mnt/data/qq-agent/app/.runtime/node-v22.23.2-linux-x64/bin/node` |
 
-**配置备份**（都在 `/mnt/data/qq-agent/data/`，共 15 份）：
+**配置备份**（都在 `/mnt/data/qq-agent/data/`，共 16 份）：
 
 ```
 config.json.bak-friendoff        # 改好友功能前
@@ -82,6 +82,7 @@ config.json.bak-pacing-sendlimit # 开 pacing 并收紧发送闸门（10/120）�
 config.json.bak-sendlimit-hi     # 发送闸门放回 15/180 前
 config.json.bak-zjsn             # 人设里 zjsn 改回"这缩写"前
 config.json.bak-pre083           # 升级 v0.8.3 前
+config.json.bak-v083-to-v084     # 升级 v0.8.4 前
 ```
 
 > 回滚用 `cp config.json.bak-<名字> config.json`，然后重启服务才生效
@@ -89,21 +90,21 @@ config.json.bak-pre083           # 升级 v0.8.3 前
 
 **本地代码补丁（升级会被覆盖，务必留意）**
 
-目前有两个补丁，完整用途与打/回退步骤见仓库 [patches/README.md](patches/README.md)：
+目前**只剩一个补丁**（收藏判定那条已随 v0.8.4 退役），完整用途与打/回退步骤见仓库
+[patches/README.md](patches/README.md)：
 
 | 补丁 | 改了什么 | 改前原件（服务器） |
 |---|---|---|
 | `memory-qq-2026-10-09` | 记忆印象行在昵称后带上 QQ 号，认人以号为准 | `app/src/memory/memory-global.js.bak-20261009` |
-| `sticker-collect-criteria-2026-10-10` | 收藏判定改成"两条都要过"并做成配置项 `sticker.collectCriteria` | `app/src/onebot/sticker-manager.js.bak-20261010`、`app/src/core/config-legacy.js.bak-20261010` |
 
-> 2026-10-10 升级到 v0.8.3 时，`deploy.sh` 的 `rsync --delete` 会把 `src/` 整个换掉，两个补丁
-> 都被覆盖 —— 已按上表重打，并另存了 v0.8.3 的原件为 `*.bak-20261010b`（重打失败时可回退）。
-> memory 补丁在 v0.8.3 上是 **17 行偏移**（`patch` 会自动对齐并提示，属正常）。
+> 2026-10-10 一天内连升两级（v0.8.3 → **v0.8.4**）：`deploy.sh` 的 `rsync --delete` 会把 `src/`
+> 整个换掉，补丁会被覆盖 —— 每次升级后按上表重打，并另存当次原件（`*.bak-20261010b` 对应
+> v0.8.3、`*.bak-v084` 对应 v0.8.4，重打失败时可回退）。memory 补丁在 v0.8.3 与 v0.8.4 上都是
+> **17 行偏移**（`patch` 会自动对齐并提示，属正常）。
 >
-> `sticker-collect-criteria` 这条**上游已合入同类能力**（PR #31，合并提交 `1f8bad2a`）：
-> **下一个含该改动的上游版本起可以退役**。退役时注意先把本部署的标准写进
-> `sticker.collectCriteria`（上游默认文案是原版那套，不填会回到默认），步骤见
-> [patches/README.md](patches/README.md)。
+> **收藏判定那条补丁已在 v0.8.4 退役**：上游自带 `sticker.collectCriteria`（PR #31，合并提交
+> `1f8bad2a`），本部署的标准改成写在配置里（当前值见 [patches/README.md](patches/README.md) 的
+> 「本部署的判定标准」一节）。**清空该字段会回到上游默认**，别清。
 
 > 收藏判定标准**平时不用改代码**：`sticker.collectCriteria` 填一段"收什么 / 不收什么"就即时生效
 > （留空 = 用内置默认）。只有改代码逻辑时才需要走下面的打补丁流程。
