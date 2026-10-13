@@ -6,7 +6,7 @@ Deployment and operations notes for a QQ group chat bot on Linux: runtime enviro
 operations manual, troubleshooting notes and persona text.
 
 [![License](https://img.shields.io/badge/license-MIT-3da639.svg)](LICENSE)
-[![qq-agent-plus](https://img.shields.io/badge/qq--agent--plus-v0.8.4-blue)](https://github.com/sakurawwwxh/qq-agent-plus)
+[![qq-agent-plus](https://img.shields.io/badge/qq--agent--plus-v0.8.5-blue)](https://github.com/sakurawwwxh/qq-agent-plus)
 [![Platform](https://img.shields.io/badge/platform-Linux-0b5fff?logo=linux&logoColor=white)](#runtime-environment)
 [![Protocol](https://img.shields.io/badge/protocol-OneBot%20v11-12b7f5)](https://github.com/botuniverse/onebot-11)
 [![LLM](https://img.shields.io/badge/LLM-DeepSeek-6b4fbb)](https://platform.deepseek.com)
@@ -30,7 +30,7 @@ project mentioned here. Issues, corrections and suggestions are welcome. See
 [NOTICE.md](NOTICE.md) for third-party rights and acknowledgements, and
 [LICENSE](LICENSE) for the licensing terms.
 
-Deployed: 2026-09-21　|　Last updated: 2026-10-03
+Deployed: 2026-09-21　|　Last updated: 2026-10-13
 
 ## Sensitive Information
 
@@ -165,17 +165,17 @@ Deployment order and the responsibilities of each layer are described in section
 
 ## Current Status
 
-As of 2026-10-09 the bot has been **reconnected and is in an observe-only period**:
+As of 2026-10-13 the bot runs in **active mode on a conservative preset** (enabled on 2026-10-12; the response probability is pinned at 0% while platform risk is watched):
 
 | Item | Status |
 |---|---|
-| Program version | `qq-agent-plus` v0.8.4 (upgraded on 2026-10-10) |
+| Program version | `qq-agent-plus` v0.8.5 (upgraded on 2026-10-13) |
 | Protocol client | `motricseven7/snowluma:v1.14.22` (upgraded on 2026-10-09) |
 | Bot account | `<BOT_QQ>`, registered on 2026-09-21 |
 | Platform restrictions | Function-limited twice (2026-09-22 and 09-23); both restored via identity verification |
-| Bot service | Running (`active`), runtime mode `observe` |
+| Bot service | Running (`active`), runtime mode `active` (enabled on 2026-10-12) |
 | Protocol container | Running, **logged in** (QR scan on 2026-10-09) |
-| Next step | Observe for 1–2 days first, then decide whether to re-enable passive replies (see section 6.2 of the operations manual) |
+| Next step | Keep the conservative preset while watching platform risk; raise the response probability step by step once stable |
 
 Logging into QQ with a third-party protocol client may be treated as abnormal by the
 platform and can lead to account restrictions. That risk is borne by the person running
@@ -211,17 +211,18 @@ For intermediate checks and error handling, see section 6 of the
 | Model and temperature | `deepseek-chat`, temperature 1.3 |
 | Persona | Role card ≈ 5.6k characters, additional rules ≈ 1.4k characters |
 | Behaviour profile / participation | `legacy` (original group-member style) / medium |
-| Response probability | 60% (always replies when mentioned) |
+| Response probability | 0% (conservative preset; always replies to mentions and private chats, ordinary group messages do not trigger yet) |
 | Message pacing | Thinking delay 15–20 s, 2.5–7 s between split messages, usually 1 message per turn, at most 2 |
 | Send throttle | 15 messages/minute and 180 messages/hour (a guard against runaway output; normal chat never reaches it) |
 | Autonomous pacing `pacing` | Enabled (group chats: wakes about every 6 minutes, minimum 3; mentions are still handled immediately) |
-| Conversation mode | `threaded` (participant continuation) |
+| Conversation mode | `lifecycle` (unified session lifecycle) |
 | Time control | Enabled (`always`); night-time behaviour is constrained by the persona rules |
 | Daily moments / Qzone interactions | **Disabled** |
-| Self-initiated talk | Cold-start topics off; follow-up off; self-scheduled wake-up kept |
+| Self-initiated talk | Cold-start topics off; follow-up off; self-scheduled wake-up off (paced check-ins still run) |
+| Extended features | Voice replies (TTS), image generation and the multimodal context pilot enabled; API budget capped at ¥3/day |
 | Member recognition | Impression lines carry the QQ number (local server-side patch; see section 3 of the operations manual) |
-| Sticker auto-collection | Enabled (at most 10 per hour); collection criteria customised via `sticker.collectCriteria` (see [patches/README.md](patches/README.md)) |
-| Allowlist | Group `<GROUP_ID>` (one); private chats: the administrator `<ADMIN_QQ>` and one test account (two) |
+| Sticker auto-collection | Enabled (at most 20 per hour); collection criteria customised via `sticker.collectCriteria` (see [patches/README.md](patches/README.md); editable from the console since v0.8.5) |
+| Allowlist | Group `<GROUP_ID>` (one); private chats: 3 entries including the administrator `<ADMIN_QQ>` and a test account |
 
 ## Operational Cautions
 
