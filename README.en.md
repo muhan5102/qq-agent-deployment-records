@@ -208,10 +208,10 @@ For intermediate checks and error handling, see section 6 of the
 
 | Item | Value |
 |---|---|
-| Model and temperature | `deepseek-chat`, temperature 1.3 |
-| Persona | Role card ≈ 5.6k characters, additional rules ≈ 1.4k characters |
+| Model and temperature | `deepseek-chat`, temperature 1.1 |
+| Persona | Role card ≈ 5.9k characters, additional rules ≈ 2.0k characters |
 | Behaviour profile / participation | `legacy` (original group-member style) / medium |
-| Response probability | 0% (conservative preset; always replies to mentions and private chats, ordinary group messages do not trigger yet) |
+| Response probability | 0% (conservative preset; always replies to mentions, keyword hits and private chats, ordinary group messages do not trigger yet) |
 | Message pacing | Thinking delay 15–20 s, 2.5–7 s between split messages, usually 1 message per turn, at most 2 |
 | Send throttle | 15 messages/minute and 180 messages/hour (a guard against runaway output; normal chat never reaches it) |
 | Autonomous pacing `pacing` | Enabled (group chats: wakes about every 6 minutes, minimum 3; mentions are still handled immediately) |
