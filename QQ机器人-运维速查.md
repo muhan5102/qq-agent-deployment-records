@@ -40,6 +40,10 @@
 自安排唤醒与自主节奏 `pacing` 均已关闭（10-15 关的 `pacing`，此前它负责定时回看兜底），
 开口全部由"被 @ / 命中关键词 / 私聊"触发；`admin` 已加入 `docker` 组（见第三节）。
 语音（TTS）走本机自建链路，属可选依赖，详见 [千早爱音-语音模型.md](千早爱音-语音模型.md)。
+资源与控制台：内存 1608MB 外**已加 2G swap**（`vm.swappiness=10`，见第六节第 12 条）；
+控制台 3210 已从 `0.0.0.0` 收回 **127.0.0.1**（只能用 SSH 隧道访问）并轮换了一次 token
+（2026-10-15）。**5099（SnowLuma 面板）仍在公网放行**——它的密码不能在线轮换（要重建容器、
+会掉登录态），只能在云安全组里收窄来源或关闭。
 
 ---
 
@@ -47,7 +51,7 @@
 
 | 组件 | 地址 / 端口 | 说明 |
 |---|---|---|
-| QQ Agent 控制台 | `http://<SERVER_IP>:3210` | 需 Agent token |
+| QQ Agent 控制台 | `http://127.0.0.1:3210` | **只监听本机**（2026-10-15 起），本机用 `tools/console-tunnel.ps1` 建隧道访问；需 Agent token |
 | SnowLuma WebUI | `http://<SERVER_IP>:5099` | 容器 `qq-agent-snowluma` |
 | QQ 扫码登录（noVNC） | `http://<SERVER_IP>:6081` | **防火墙平时禁用**，需要时临时启用 |
 | OneBot HTTP / WS | `127.0.0.1:3000` / `:3001` | 仅本机，不对外 |
@@ -66,9 +70,11 @@
 | 项目源码 | `/home/admin/qq-agent-plus` |
 | Node 运行时 | `/mnt/data/qq-agent/app/.runtime/node-v22.23.2-linux-x64/bin/node` |
 
-**配置备份**（都在 `/mnt/data/qq-agent/data/`，共 38 份，按新 → 旧）：
+**配置备份**（都在 `/mnt/data/qq-agent/data/`，共 40 份，按新 → 旧）：
 
 ```
+config.json.bak-pre-hostloop     # 把控制台从 0.0.0.0 改回 127.0.0.1 前（10-15）
+config.json.bak-pre-tokenrot     # 轮换控制台 token 前（10-15）
 config.json.bak-pre-collectcrit21 # 表情收藏标准里"高中生"改"大学生"前（10-15）
 config.json.bak-pre-hearing      # 作废"你听不了语音"、加听语音规则前（10-15）
 config.json.bak-pre-tts          # 接入自建语音（TTS）前（10-15）
@@ -111,11 +117,18 @@ config.json.bak-friendoff        # 改好友功能前
 
 > 回滚用 `cp config.json.bak-<名字> config.json`，然后重启服务才生效
 > （控制台改配置是即时生效的，直接改文件才需要重启）。
+>
+> **⚠️ 别直接手改 config.json**：运行中的服务以**内存里的配置**为准，手改文件既不生效，
+> 还会在**下一次控制台保存时被内存里的旧值整个覆盖回去**（2026-10-15 实测：一处文案手改后
+> 被一次保存冲掉，直到复查才发现）。要改就走控制台/`POST /api/config`；万一只能手改，
+> 改完**立刻重启服务**再动别的。
 
 **本地代码补丁（升级会被覆盖，务必留意）**
 
-目前**有三个补丁**（收藏判定那条已随 v0.8.4 退役），完整用途与打/回退步骤见仓库
-[patches/README.md](patches/README.md)：
+目前**有三个补丁**（收藏判定那条已随 v0.8.4 退役）。升级后重打不用手工来：服务器上
+`/mnt/data/qq-agent/apply-patches.sh` 会逐条判断"已生效 / 待打 / 冲突"，只补缺的、
+打完跑 `node --check`、遇到冲突原样留着不动；加 `--restart` 才重启主体。
+完整用途与打/回退步骤见仓库 [patches/README.md](patches/README.md)：
 
 | 补丁 | 改了什么 | 改前原件（服务器） |
 |---|---|---|
@@ -433,6 +446,18 @@ sudo docker image prune -f   # 清理无用镜像（可选）
 
 当前内存占用约 690MB / 1608MB（SnowLuma 容器占大头）。如果不需要协议端，可以 `sudo docker stop qq-agent-snowluma` 省下约 500MB；恢复时用 `cd /mnt/data/qq-agent/snowluma && sudo docker compose up -d`。
 
+**已加 2G swap（2026-10-15）**：这台机器只有 1608MB 内存，2026-10-13 的 IO 风暴里
+内存一满就直接被压死，所以补了 swap：
+
+```bash
+swapon --show                              # /swapfile 2G
+grep swapfile /etc/fstab                   # 开机自动挂
+sysctl vm.swappiness vm.vfs_cache_pressure # 10 / 50
+```
+
+`vm.swappiness=10` 是刻意的：小内存机器上换页频繁反而拖慢，只在真吃紧时才用。
+配置写在 `/etc/sysctl.d/99-swap.conf`，`/etc/fstab` 改前另存了 `.bak-20261015`。
+
 ---
 
 ## 七、操作红线（不要做）
@@ -450,7 +475,7 @@ sudo docker image prune -f   # 清理无用镜像（可选）
 
 ## 八、相关文档
 
-- [踩坑总结.md](踩坑总结.md)：35 个已踩的坑 + 具体原因（部署、SSH、运行、人设调优、语音链路）
+- [踩坑总结.md](踩坑总结.md)：37 个已踩的坑 + 具体原因（部署、SSH、运行、人设调优、语音链路、服务器运维）
 - [千早爱音-角色卡.md](千早爱音-角色卡.md)：当前使用的人设正文
 - [爱音-附加规则.md](爱音-附加规则.md)：管理员附加规则正文
 - [千早爱音-语音模型.md](千早爱音-语音模型.md)：语音（GPT-SoVITS）的来源、协议与自建链路

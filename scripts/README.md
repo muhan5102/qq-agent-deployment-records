@@ -42,6 +42,24 @@ bash verify-deployment.sh
 
 账号处于养号期时，"服务"与"登录态"两项显示为未运行属于**预期状态**，不是故障。
 
+## apply-patches.sh
+
+**升级后重新打本地补丁**。`deploy-all.sh` 的 `rsync --delete` 会整树替换 `app/src/`，
+本仓库 `patches/` 里记录的那几条改动每次升级都会被覆盖回去。
+
+```bash
+bash apply-patches.sh                 # 检查并补齐缺的补丁，不重启
+bash apply-patches.sh --restart       # 补齐后重启机器人主体
+DRY_RUN=1 bash apply-patches.sh       # 只看会做什么，不落盘
+```
+
+它逐条判断：反向 dry-run 通过 = 已经生效（跳过）；正向 dry-run 通过 = 补上，改完跑一次
+`node --check`；两边都对不上 = 报冲突并**原样留着不动**，绝不硬打。只要有一条需要人工处理，
+脚本就以非 0 退出且不重启服务。
+
+可用 `APP_DIR`、`PATCH_DIR`、`NODE` 覆盖默认路径。它不改任何配置、不碰容器、不动登录态——
+唯一的写操作是给 `src/` 里的目标文件打补丁。
+
 ## console-tunnel.ps1
 
 在**本机 Windows** 上运行。通过 SSH 隧道把服务器上的控制台（3210）与 SnowLuma 面板（5099）

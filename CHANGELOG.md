@@ -54,6 +54,26 @@
 - 语音模型属第三方成果（CC-BY-NC、禁止商用、不得二次配布），署名与协议要求写进
   [NOTICE.md](NOTICE.md) 与 [千早爱音-语音模型.md](千早爱音-语音模型.md)
 
+### 服务器运维
+
+- **加 2G swap**：机器只有 1608MB 内存，10-13 那次 IO 风暴就是内存一满直接被压死。
+  新建 `/swapfile`（2G）并写入 `/etc/fstab`，`vm.swappiness=10`、`vm.vfs_cache_pressure=50`
+  写进 `/etc/sysctl.d/99-swap.conf`（`/etc/fstab` 改前另存 `fstab.bak-20261015`）
+- **升级后重打补丁自动化**：新增 [scripts/apply-patches.sh](scripts/apply-patches.sh)
+  （服务器上放 `/mnt/data/qq-agent/apply-patches.sh`）。逐条判断"已生效 / 待打 / 冲突"，
+  只补缺的、打完跑 `node --check`、对不上就原样留着不动；`--restart` 才重启主体。
+  用一份还原成"升级后"状态的临时代码树实测：待打 → 打上 → 再跑显示已生效
+- **控制台收口**：`server.host` 由 `0.0.0.0` 改为 `127.0.0.1`（备份 `config.json.bak-pre-hostloop`），
+  3210 恢复为只监听本机（从公网访问已不通，本机走 `tools/console-tunnel.ps1` 隧道）；
+  同时轮换了一次控制台 token（备份 `config.json.bak-pre-tokenrot`），走控制台自带的
+  `POST /api/console-token`，服务器上的 `data/console-access.txt` 与 `deployment-access.txt` 同步更新，
+  新 token 登录 200、旧 token 401
+- **仍未收口**：5099（SnowLuma 面板）仍对公网放行。它的密码属于容器侧配置，**不能在线轮换**
+  （改密码要重建容器、会掉 QQ 登录态），只能在云安全组里收窄来源或关闭
+- **修正一处被覆盖的改动**：当天早些时候对 `sticker.collectCriteria` 的手改
+  （"高中生"改"大学生"）被运行中服务的内存旧值覆盖回去，已改走 `POST /api/config` 重新落地，
+  内存与磁盘一致；教训见「踩坑总结」第 36 条
+
 ## 2026-10-14
 
 ### 变更

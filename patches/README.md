@@ -21,6 +21,21 @@
 `Hunk #1 succeeded at 211 (offset 17 lines)`——这是正常的自动对齐，不是失败；打完照例跑
 `node --check` 确认（**v0.8.4**、**v0.8.5** 上同样是 17 行偏移）。
 
+## 升级后一键重打（`scripts/apply-patches.sh`）
+
+上面的补丁清单如果靠手工逐条打，升级一忙就容易漏。仓库里的 `scripts/apply-patches.sh`
+（服务器上放 `/mnt/data/qq-agent/apply-patches.sh`）把这件事收成一条命令：
+
+```bash
+bash apply-patches.sh            # 检查并补齐缺的，不重启
+bash apply-patches.sh --restart  # 补齐后重启机器人主体（不动容器）
+```
+
+判断逻辑：**反向 dry-run 通过 = 已经生效**（跳过）；正向 dry-run 通过 = 补上并跑 `node --check`；
+两边都对不上 = 报冲突并原样留着不动，退出码非 0，也**不会**重启服务。所以它在"已经打过"、
+"全新升级后"两种状态下都安全，重复执行没有副作用（2026-10-15 用一份还原成升级后状态的临时
+代码树实测通过）。
+
 ---
 
 ## memory-qq-2026-10-09.diff
