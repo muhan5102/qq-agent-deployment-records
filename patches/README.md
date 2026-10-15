@@ -12,7 +12,7 @@
 |---|---|---|---|
 | [memory-qq-2026-10-09.diff](memory-qq-2026-10-09.diff) | `src/memory/memory-global.js` | `qq-agent-plus` v0.8.1、v0.8.3、v0.8.4、v0.8.5 | 让「对群友的全局印象」每行在昵称后带上 `(QQ 号)`，认人以号为准 |
 | [patch-sticker-note-40-2026-10-14.diff](patch-sticker-note-40-2026-10-14.diff) | `src/onebot/sticker-manager.js` | v0.8.5 | 表情备注上限 24 → 40 字，让"谁+在干什么+适合什么场合"写得完 |
-| [patch-memory-guard-2026-10-15.diff](patch-memory-guard-2026-10-15.diff) | `src/core/orchestrator.js` | v0.8.5 | 给「人物印象」整理器加约束：不抄粗口、不写私聊亲密内容、不用"经常/总是"这类量化词 |
+| [patch-memory-guard-2026-10-15.diff](patch-memory-guard-2026-10-15.diff) | `src/core/orchestrator.js` | v0.8.5 | 给「人物印象」整理器加约束：不抄粗口、私聊内容不进印象、不用"经常/总是"这类量化词 |
 
 > `sticker-collect-criteria` 已于 2026-10-10 **退役**（上游 v0.8.4 自带同一能力），
 > 见文末「已退役」一节；它的判定标准现在由配置 `sticker.collectCriteria` 承担。
@@ -130,8 +130,8 @@ systemctl --user restart qq-agent-linux
 2. **给行为贴标签**——把"他喜欢逗你"写成"想掌控设定""喜欢试探规则"这类揣测动机的说法；
 3. **量化词**——"经常""总是""从来"，一次观察就被写成习惯。
 
-另外私聊里的亲密内容与感情表白也不该进群聊用的印象库。这个补丁在两处整理提示词里各加一行
-约束（全局印象、单群印象各一处），只改提示词，不动数据结构与写入逻辑。
+另外私聊内容也不该进群聊用的印象库。这个补丁在两处整理提示词里各加一行约束
+（全局印象、单群印象各一处），只改提示词，不动数据结构与写入逻辑。
 
 ### 打补丁
 

@@ -134,7 +134,7 @@ config.json.bak-friendoff        # 改好友功能前
 |---|---|---|
 | `memory-qq-2026-10-09` | 记忆印象行在昵称后带上 QQ 号，认人以号为准 | `app/src/memory/memory-global.js.bak-20261009` |
 | `patch-sticker-note-40-2026-10-14` | 表情自动收藏的备注上限 24 → 40 字（超出的会被 `slice` 截断，配置文件改不破） | `app/src/onebot/sticker-manager.js.bak-*` |
-| `patch-memory-guard-2026-10-15` | 人物印象整理加约束：不抄粗口、不写私聊亲密内容、不用"经常/总是"这类量化词 | `app/src/core/orchestrator.js.bak-*` |
+| `patch-memory-guard-2026-10-15` | 人物印象整理加约束：不抄粗口、私聊内容不进印象、不用"经常/总是"这类量化词 | `app/src/core/orchestrator.js.bak-*` |
 
 > 2026-10-10 一天内连升两级（v0.8.3 → **v0.8.4**），10-13 再升 **v0.8.5**：`deploy.sh` 的 `rsync --delete` 会把 `src/`
 > 整个换掉，补丁会被覆盖 —— 每次升级后按上表重打，并另存当次原件（`*.bak-20261010b` 对应
