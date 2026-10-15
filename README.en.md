@@ -139,7 +139,7 @@ sensitive-information problems.
 | Runtime | Docker (protocol-side container) + systemd user service (the bot itself) |
 | Model | DeepSeek, OpenAI-compatible API |
 | Deployment directory | `/mnt/data/qq-agent` (`app/` program, `data/` data, `snowluma/` protocol side) |
-| Exposed ports | Console 3210 (reachable from the internet, needs the agent token), protocol panel 5099 (open to the internet), QR login 6081 (disabled by default) |
+| Exposed ports | Console 3210 (reachable from the internet, needs the agent token), protocol panel 5099 (**closed in the cloud firewall**; open it temporarily when needed — the bot queries it over loopback), QR login 6081 (disabled by default) |
 
 Concrete values such as the server address are kept in the local `LOCAL-NOTES.md`.
 
