@@ -64,9 +64,8 @@ When reading this repository, replace any placeholder in a command (for example
 
 | File | Description |
 |---|---|
-| [千早爱音-角色卡.md](千早爱音-角色卡.md) | The persona text itself (current version: **[V2](人设版本.md)**) |
+| [千早爱音-角色卡.md](千早爱音-角色卡.md) | The persona text itself (current version: **V2**; version history is in the 2026-10-15 entry of [CHANGELOG.md](CHANGELOG.md)) |
 | [爱音-附加规则.md](爱音-附加规则.md) | Additional constraints for the persona; takes precedence over the persona file |
-| [人设版本.md](人设版本.md) | Persona version log: which version is current and what each version improved (Chinese only) |
 | [千早爱音-语音模型.md](千早爱音-语音模型.md) | The voice (GPT-SoVITS) model: origin, licence, parameters and the self-hosted pipeline; **weights are not in this repository** (Chinese only) |
 
 ### Notices and Licensing
@@ -221,7 +220,7 @@ For intermediate checks and error handling, see section 6 of the
 | Persona | Role card ≈ 6.3k characters (21-year-old university student), additional rules ≈ 2.9k characters |
 | Behaviour profile / participation | `legacy` (original group-member style) / medium |
 | Response probability | 0% (conservative preset; always replies to mentions, keyword hits and private chats, ordinary group messages do not trigger yet) |
-| Message pacing | Thinking delay 15–20 s, 2.5–7 s between split messages, usually 1 message per turn, at most 2 |
+| Message pacing | Thinking delay **5–15 s**, 2.5–7 s between split messages, usually 1 message per turn, at most 2 |
 | Send throttle | 15 messages/minute and 180 messages/hour (a guard against runaway output; normal chat never reaches it) |
 | Autonomous pacing `pacing` | **Disabled** (2026-10-15): it made the bot wake up on its own and add a line, which conflicts with "only speak when others are talking and it fits" |
 | Conversation mode | `lifecycle` (unified session lifecycle) |
