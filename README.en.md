@@ -65,8 +65,9 @@ When reading this repository, replace any placeholder in a command (for example
 
 | File | Description |
 |---|---|
-| [千早爱音-角色卡.md](千早爱音-角色卡.md) | The persona text itself |
+| [千早爱音-角色卡.md](千早爱音-角色卡.md) | The persona text itself (current version: **[V2](人设版本.md)**) |
 | [爱音-附加规则.md](爱音-附加规则.md) | Additional constraints for the persona; takes precedence over the persona file |
+| [人设版本.md](人设版本.md) | Persona version log: which version is current and what each version improved (Chinese only) |
 | [千早爱音-语音模型.md](千早爱音-语音模型.md) | The voice (GPT-SoVITS) model: origin, licence, parameters and the self-hosted pipeline; **weights are not in this repository** (Chinese only) |
 
 ### Notices and Licensing
