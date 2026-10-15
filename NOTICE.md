@@ -1,6 +1,6 @@
 # 声明、第三方权利与致谢
 
-最后更新：2026-10-03
+最后更新：2026-10-15
 
 ## 一、本仓库的性质
 
@@ -25,6 +25,7 @@
 | [Node.js](https://nodejs.org/) | 机器人运行时 | MIT 许可，版权归 OpenJS Foundation 及贡献者 |
 | [Docker](https://www.docker.com/) | 协议端容器运行时 | 各组件遵循自身许可，商标归 Docker, Inc. |
 | [Ubuntu](https://ubuntu.com/) | 服务器操作系统 | 系统组件遵循各自开源许可，商标归 Canonical |
+| 千早爱音语音模型（GPT-SoVITS） | 语音合成（可选） | **CC-BY-NC 4.0**，作者 **花咲川楽奈**；禁止商用、不得二次配布 |
 
 此外：
 
@@ -33,6 +34,13 @@
   著作权与商标权归 [Bushiroad](https://bushiroad.com/) 及相关权利人所有。
 - 设定资料参考自 [萌娘百科](https://zh.moegirl.org.cn/%E5%8D%83%E6%97%A9%E7%88%B1%E9%9F%B3)、
   [百度百科](https://baike.baidu.com/item/%E5%8D%83%E6%97%A9%E7%88%B1%E9%9F%B3) 对应条目，仅用于核对角色设定。
+- 语音模型「`MyGO_千早爱音_v2pp`」（GPT-SoVITS v2ProPlus）由 **花咲川楽奈**
+  （Bilibili 主页 <https://space.bilibili.com/40008084>，交流群 **339588591**）训练并公开分享，
+  采用 [CC-BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/deed.zh-hans) 协议；
+  训练数据来源为 [Bestdori!](https://bestdori.com/) 与 [ウマ娘WIKI](https://wiki.biligame.com)。
+  按作者要求完整标注上述署名：该模型**禁止任何商业用途、不得二次配布**。
+  **本仓库不含该模型权重**，只记录来源、参数与配置方式（见 [千早爱音-语音模型.md](千早爱音-语音模型.md)）。
+  形象与语音的权利同样归 BUSHIROAD / Cygames / Key / TOEI ANIMATION，仅限二次创作。
 - 部署流程参考了小黑盒社区的公开教程《在自己 QQ 群里养一个 AI 群友：qq-agent-plus
   保姆级部署教程》（作者 bbbgd，[原文链接](https://www.xiaoheihe.cn/app/bbs/link/43197277b4fa)），在此致谢。
 

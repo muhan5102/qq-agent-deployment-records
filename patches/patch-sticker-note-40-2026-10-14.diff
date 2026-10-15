@@ -1,0 +1,20 @@
+--- a/src/onebot/sticker-manager.js
++++ b/src/onebot/sticker-manager.js
+@@ -553,7 +553,7 @@
+           additionalProperties: false,
+           properties: {
+             save: { type: 'boolean', description: 'true=值得收进表情库；false=不值得' },
+-            note: { type: 'string', maxLength: 24, description: 'save=true 时写一句简短备注（画的是什么/适合什么场合）；save=false 留空' },
++            note: { type: 'string', maxLength: 40, description: 'save=true 时写一句简短备注（画的是什么/适合什么场合）；save=false 留空' },
+             reason: { type: 'string', maxLength: 40, description: '一句话说明为什么收/不收（给日志看）' }
+           },
+           required: ['save']
+@@ -646,7 +646,7 @@
+     if (!args) args = {};
+     return {
+       save: args.save === true,
+-      note: String(args.note || '').slice(0, 24),
++      note: String(args.note || '').slice(0, 40),
+       reason: String(args.reason || '').slice(0, 40)
+     };
+   }

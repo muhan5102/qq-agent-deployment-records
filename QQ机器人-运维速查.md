@@ -33,11 +33,13 @@
 | 机器人 QQ | <BOT_QQ>（昵称 Chihaya Anon） |
 | 管理员 QQ | <ADMIN_QQ>（机器人告警/审批收件人） |
 
-**当前状态（2026-10-13）**：机器人**已切换到主动模式、以保守档运行**（2026-10-12 启用，响应概率 0%）——服务 `active`、
+**当前状态（2026-10-15）**：机器人**已切换到主动模式、以保守档运行**（2026-10-12 启用，响应概率 0%）——服务 `active`、
 运行模式 `active`；协议端容器运行中且**已登录**（2026-10-09 扫码，之后没重启过容器）。程序已于
 2026-10-13 升级至 **v0.8.5**（协议端镜像仍是 **`motricseven7/snowluma:v1.14.22`**，
 与上游基线一致，所以升级时"随版本对齐协议端"是 no-op）。每日动态、动态互动、补话均已关闭；
-自安排唤醒已关闭（由 `pacing` 节奏回看兜底）；自主节奏 `pacing` 已开启；`admin` 已加入 `docker` 组（见第三节）。
+自安排唤醒与自主节奏 `pacing` 均已关闭（10-15 关的 `pacing`，此前它负责定时回看兜底），
+开口全部由"被 @ / 命中关键词 / 私聊"触发；`admin` 已加入 `docker` 组（见第三节）。
+语音（TTS）走本机自建链路，属可选依赖，详见 [千早爱音-语音模型.md](千早爱音-语音模型.md)。
 
 ---
 
@@ -64,26 +66,47 @@
 | 项目源码 | `/home/admin/qq-agent-plus` |
 | Node 运行时 | `/mnt/data/qq-agent/app/.runtime/node-v22.23.2-linux-x64/bin/node` |
 
-**配置备份**（都在 `/mnt/data/qq-agent/data/`，共 17 份）：
+**配置备份**（都在 `/mnt/data/qq-agent/data/`，共 38 份，按新 → 旧）：
 
 ```
-config.json.bak-friendoff        # 改好友功能前
-config.json.bak-prob0            # 好友抽签概率设 0 前
-config.json.bak-pacing           # 调整节奏参数前（2026-09）
-config.json.bak-short            # 缩短话痨前
-config.json.bak-qzoneoff         # 关动态互动前
-config.json.bak-moments          # 改动态发布时间前
-config.json.bak-pre084           # 升级 v0.7.8 前
-config.json.bak-prob60-before    # 响应概率改回 60% 前
-config.json.bak-pre081           # 升级 v0.8.1 前
-config.json.bak-moments-off      # 关每日动态前
-config.json.bak-followup-off     # 关补话前
-config.json.bak-pacing-sendlimit # 开 pacing 并收紧发送闸门（10/120）前
-config.json.bak-sendlimit-hi     # 发送闸门放回 15/180 前
-config.json.bak-zjsn             # 人设里 zjsn 改回"这缩写"前
-config.json.bak-pre083           # 升级 v0.8.3 前
-config.json.bak-v083-to-v084     # 升级 v0.8.4 前
+config.json.bak-pre-collectcrit21 # 表情收藏标准里"高中生"改"大学生"前（10-15）
+config.json.bak-pre-hearing      # 作废"你听不了语音"、加听语音规则前（10-15）
+config.json.bak-pre-tts          # 接入自建语音（TTS）前（10-15）
+config.json.bak-pre-notestd      # 表情备注标准改成按特征描述前（10-14）
+config.json.bak-pre-cardv2       # 角色卡改版前（10-14）
+config.json.bak-pre-clearkey     # 清配置里的 key 前（10-15）
+config.json.bak-pre-search-deepseek # 联网搜索改走 deepseek 前（10-15）
+config.json.bak-pre-cognition-fix # 认知与人设对齐前（10-15）
+config.json.bak-pre-age-slim     # 人设年龄与过时条目调整前（10-15）
+config.json.bak-pre-comment-habits # 调整表情备注写法前（10-14）
+config.json.bak-pre-pacing-off   # 关闭自主节奏 pacing 前（10-15）
+config.json.bak-pre-note40       # 表情备注上限改 40 字前（10-14）
+config.json.bak-pre-keywords     # 配关键词触发前（10-14）
+config.json.bak-pre-platform-override # 覆盖平台两段提示前（10-14）
+config.json.bak-pre-cardsync2    # 人设库副本再同步前（10-14）
+config.json.bak-pre-oldtopic     # 加"别翻旧账"前
+config.json.bak-pre-cardsync     # 人设库副本同步前
+config.json.bak-pre-timecheck    # 加时间校验相关规则前
+config.json.bak-pre-coldtopic    # 补"冷场禁起话头"前
+config.json.bak-pre-image-rules  # 加【看图与表情包】前
+config.json.bak-pre-temp11       # 温度 1.3 → 1.1 前
 config.json.bak-pre-activate     # 启用主动模式前（响应概率仍 60%）
+config.json.bak-v083-to-v084     # 升级 v0.8.4 前
+config.json.bak-pre083           # 升级 v0.8.3 前
+config.json.bak-zjsn             # 人设里 zjsn 改回"这缩写"前
+config.json.bak-sendlimit-hi     # 发送闸门放回 15/180 前
+config.json.bak-pacing-sendlimit # 开 pacing 并收紧发送闸门（10/120）前
+config.json.bak-followup-off     # 关补话前
+config.json.bak-moments-off      # 关每日动态前
+config.json.bak-pre081           # 升级 v0.8.1 前
+config.json.bak-prob60-before    # 响应概率改回 60% 前
+config.json.bak-pre084           # 升级 v0.7.8 前
+config.json.bak-moments          # 改动态发布时间前
+config.json.bak-qzoneoff         # 关动态互动前
+config.json.bak-short            # 缩短话痨前
+config.json.bak-pacing           # 调整节奏参数前（2026-09）
+config.json.bak-prob0            # 好友抽签概率设 0 前
+config.json.bak-friendoff        # 改好友功能前
 ```
 
 > 回滚用 `cp config.json.bak-<名字> config.json`，然后重启服务才生效
@@ -91,12 +114,14 @@ config.json.bak-pre-activate     # 启用主动模式前（响应概率仍 60%�
 
 **本地代码补丁（升级会被覆盖，务必留意）**
 
-目前**只剩一个补丁**（收藏判定那条已随 v0.8.4 退役），完整用途与打/回退步骤见仓库
+目前**有三个补丁**（收藏判定那条已随 v0.8.4 退役），完整用途与打/回退步骤见仓库
 [patches/README.md](patches/README.md)：
 
 | 补丁 | 改了什么 | 改前原件（服务器） |
 |---|---|---|
 | `memory-qq-2026-10-09` | 记忆印象行在昵称后带上 QQ 号，认人以号为准 | `app/src/memory/memory-global.js.bak-20261009` |
+| `patch-sticker-note-40-2026-10-14` | 表情自动收藏的备注上限 24 → 40 字（超出的会被 `slice` 截断，配置文件改不破） | `app/src/onebot/sticker-manager.js.bak-*` |
+| `patch-memory-guard-2026-10-15` | 人物印象整理加约束：不抄粗口、不写私聊亲密内容、不用"经常/总是"这类量化词 | `app/src/core/orchestrator.js.bak-*` |
 
 > 2026-10-10 一天内连升两级（v0.8.3 → **v0.8.4**），10-13 再升 **v0.8.5**：`deploy.sh` 的 `rsync --delete` 会把 `src/`
 > 整个换掉，补丁会被覆盖 —— 每次升级后按上表重打，并另存当次原件（`*.bak-20261010b` 对应
@@ -115,6 +140,10 @@ config.json.bak-pre-activate     # 启用主动模式前（响应概率仍 60%�
 ```bash
 cd /mnt/data/qq-agent/app && patch -p1 < /mnt/data/qq-agent/patch-memory-qq-2026-10-09.diff
 ./.runtime/node-v22.23.2-linux-x64/bin/node --check src/memory/memory-global.js
+cd /mnt/data/qq-agent/app && patch -p1 < /mnt/data/qq-agent/patch-sticker-note-40-2026-10-14.diff
+./.runtime/node-v22.23.2-linux-x64/bin/node --check src/onebot/sticker-manager.js
+cd /mnt/data/qq-agent/app && patch -p1 < /mnt/data/qq-agent/patch-memory-guard-2026-10-15.diff
+./.runtime/node-v22.23.2-linux-x64/bin/node --check src/core/orchestrator.js
 systemctl --user restart qq-agent-linux
 ```
 
@@ -421,6 +450,7 @@ sudo docker image prune -f   # 清理无用镜像（可选）
 
 ## 八、相关文档
 
-- [踩坑总结.md](踩坑总结.md)：25 个已踩的坑 + 具体原因（部署、SSH、运行、人设调优）
+- [踩坑总结.md](踩坑总结.md)：35 个已踩的坑 + 具体原因（部署、SSH、运行、人设调优、语音链路）
 - [千早爱音-角色卡.md](千早爱音-角色卡.md)：当前使用的人设正文
 - [爱音-附加规则.md](爱音-附加规则.md)：管理员附加规则正文
+- [千早爱音-语音模型.md](千早爱音-语音模型.md)：语音（GPT-SoVITS）的来源、协议与自建链路

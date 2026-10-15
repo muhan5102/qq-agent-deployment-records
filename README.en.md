@@ -66,6 +66,7 @@ When reading this repository, replace any placeholder in a command (for example
 |---|---|
 | [千早爱音-角色卡.md](千早爱音-角色卡.md) | The persona text itself |
 | [爱音-附加规则.md](爱音-附加规则.md) | Additional constraints for the persona; takes precedence over the persona file |
+| [千早爱音-语音模型.md](千早爱音-语音模型.md) | The voice (GPT-SoVITS) model: origin, licence, parameters and the self-hosted pipeline; **weights are not in this repository** (Chinese only) |
 
 ### Notices and Licensing
 
@@ -150,6 +151,10 @@ QQ groups  ⇄  SnowLuma container (OneBot protocol side)
               QQ Agent (systemd user service)
                     ↓
               DeepSeek chat model
+
+         Voice: QQ Agent ──▶ 127.0.0.1:9881 (adapter on this PC)
+                             ⇅ SSH reverse tunnel (opened from this PC)
+                     GPT-SoVITS API 127.0.0.1:9880 on this PC (must be powered on)
 ```
 
 - **Protocol side**: Docker container `qq-agent-snowluma`, handling communication with
@@ -159,13 +164,15 @@ QQ groups  ⇄  SnowLuma container (OneBot protocol side)
 - **Console**: web interface on port 3210 for editing configuration, reading session
   records and checking usage statistics.
 - **Model**: an OpenAI-compatible HTTP API.
+- **Voice**: TTS is an **optional dependency** — if the PC is off there is simply no
+  voice, and the bot falls back to text. See [千早爱音-语音模型.md](千早爱音-语音模型.md).
 
 Deployment order and the responsibilities of each layer are described in section 2 of
 [整体流程.md](整体流程.md).
 
 ## Current Status
 
-As of 2026-10-13 the bot runs in **active mode on a conservative preset** (enabled on 2026-10-12; the response probability is pinned at 0% while platform risk is watched):
+As of 2026-10-15 the bot runs in **active mode on a conservative preset** (enabled on 2026-10-12; the response probability is pinned at 0% while platform risk is watched):
 
 | Item | Status |
 |---|---|
@@ -175,6 +182,7 @@ As of 2026-10-13 the bot runs in **active mode on a conservative preset** (enabl
 | Platform restrictions | Function-limited twice (2026-09-22 and 09-23); both restored via identity verification |
 | Bot service | Running (`active`), runtime mode `active` (enabled on 2026-10-12) |
 | Protocol container | Running, **logged in** (QR scan on 2026-10-09) |
+| Voice | Self-hosted GPT-SoVITS on this PC behind an SSH reverse tunnel (private chats only); falls back to text when the PC is off |
 | Next step | Keep the conservative preset while watching platform risk; raise the response probability step by step once stable |
 
 Logging into QQ with a third-party protocol client may be treated as abnormal by the
@@ -209,19 +217,19 @@ For intermediate checks and error handling, see section 6 of the
 | Item | Value |
 |---|---|
 | Model and temperature | `deepseek-chat`, temperature 1.1 |
-| Persona | Role card ≈ 5.9k characters, additional rules ≈ 2.0k characters |
+| Persona | Role card ≈ 6.3k characters (21-year-old university student), additional rules ≈ 2.9k characters |
 | Behaviour profile / participation | `legacy` (original group-member style) / medium |
 | Response probability | 0% (conservative preset; always replies to mentions, keyword hits and private chats, ordinary group messages do not trigger yet) |
 | Message pacing | Thinking delay 15–20 s, 2.5–7 s between split messages, usually 1 message per turn, at most 2 |
 | Send throttle | 15 messages/minute and 180 messages/hour (a guard against runaway output; normal chat never reaches it) |
-| Autonomous pacing `pacing` | Enabled (group chats: wakes about every 6 minutes, minimum 3; mentions are still handled immediately) |
+| Autonomous pacing `pacing` | **Disabled** (2026-10-15): it made the bot wake up on its own and add a line, which conflicts with "only speak when others are talking and it fits" |
 | Conversation mode | `lifecycle` (unified session lifecycle) |
 | Time control | Enabled (`always`); night-time behaviour is constrained by the persona rules |
 | Daily moments / Qzone interactions | **Disabled** |
-| Self-initiated talk | Cold-start topics off; follow-up off; self-scheduled wake-up off (paced check-ins still run) |
-| Extended features | Voice replies (TTS), image generation and the multimodal context pilot enabled; API budget capped at ¥3/day |
+| Self-initiated talk | Cold-start topics off; follow-up off; self-scheduled wake-up off (and `pacing` is off too, so everything is driven by mentions, keywords and private chats) |
+| Extended features | Voice replies (TTS, self-hosted), speech-to-text (ASR), image generation and the multimodal context pilot enabled; API budget capped at ¥3/day |
 | Member recognition | Impression lines carry the QQ number (local server-side patch; see section 3 of the operations manual) |
-| Sticker auto-collection | Enabled (at most 20 per hour); collection criteria customised via `sticker.collectCriteria` (see [patches/README.md](patches/README.md); editable from the console since v0.8.5) |
+| Sticker auto-collection | Enabled (at most 20 per hour); collection criteria customised via `sticker.collectCriteria`, and the note length cap raised from 24 to 40 characters by a local patch (see [patches/README.md](patches/README.md); editable from the console since v0.8.5) |
 | Allowlist | Group `<GROUP_ID>` (one); private chats: 3 entries including the administrator `<ADMIN_QQ>` and a test account |
 
 ## Operational Cautions

@@ -6,8 +6,53 @@
 ## 未发布
 
 - 计划：观察 1~2 天后放开被动回复（放开前先看一遍「对话 → 会话」里的完整模型输入）
-- 计划：把服务器侧的本地补丁纳入升级流程，避免 `deploy-all.sh` 覆盖后丢失
+- 计划：把服务器侧的本地补丁纳入升级流程，避免 `deploy-all.sh` 覆盖后丢失（补丁已全部落到本仓库
+  `patches/`，尚缺的是升级后自动重打的环节）
 - 待定：是否启用服务端敏感信息扫描（GitHub Secret Scanning / Actions 工作流）
+
+## 2026-10-15
+
+### 新增：自建语音链路（TTS）
+
+- 机器人能发自己的声音：本机跑 GPT-SoVITS（v2ProPlus + 千早爱音模型）出 9880，
+  前面套一层 OpenAI 兼容的适配器出 9881，再用 **SSH 反向隧道**把服务器的
+  `127.0.0.1:9881` 接到本机——机器人照常填 OpenAI 格式的 `tts.*` 就能用
+  （备份 `config.json.bak-pre-tts`）。除配置外不碰服务器上的任何东西
+- 模型来源、参数、参考音频、踩坑与开源协议署名见新增文档
+  [千早爱音-语音模型.md](千早爱音-语音模型.md)；**模型权重不进仓库**（CC-BY-NC、不得二次配布）
+- 本机加了开机自启看门狗（`anon-voice-autostart.ps1`），并用 SSH 反向隧道验活兜底：
+  Windows 版 `ssh` 在链路断掉时可能卡在 CloseWait 不退出，光靠 `ServerAliveInterval` 不可靠
+
+### 新增：能听懂语音
+
+- 服务器补装 **ffmpeg 4.4.2**（此前缺失）：没有它时 `get_message_audio` 直接报
+  `spawn ffmpeg ENOENT`，表现成"机器人说听不了语音"
+- 语音转写走 OpenAI 兼容的云端服务（模型 `FunAudioLLM/SenseVoiceSmall`），`asr.enabled = true`
+- 附加规则作废平台那句"你听不了语音"，并写明"语音与音频都会自动转文字，按普通文字接"
+  （备份 `config.json.bak-pre-hearing`）
+
+### 调整
+
+- 自主节奏 `pacing` 关闭（备份 `config.json.bak-pre-pacing-off`）：它会让机器人隔一段时间
+  自己醒过来补一句，与"只在有人聊、且接得上时开口"的定位冲突；关掉后由"被 @ / 命中关键词 /
+  私聊"触发
+- 角色卡与人设年龄对齐：由高中生改为 **21 岁大学生**，"该懂的都懂"但只表态、不写细节；
+  私聊里可以顺着亲密度接话。角色卡与附加规则同步改写（字数见 README「配置摘要」）
+- 附加规则新增【语音】一节：只在私聊、只在被明确要求时发；发不出去就退回打字，不重试不解释
+- 附加规则新增【开口前】与【发言通道】：先说对方那句的重点、同一件事最多提一次、
+  查不到就直说；并写明"想说的必须经 `send_message` 发出，决定不说就安静结束，别写旁白"
+- 表情备注上限 **24 → 40 字**（本地补丁 [patches/patch-sticker-note-40-2026-10-14.diff](patches/patch-sticker-note-40-2026-10-14.diff)，
+  `collectCriteria` 一并改成"谁 + 在干什么 + 适合什么场合"三段），历史备注同步重写
+- 记忆整理加约束（本地补丁 [patches/patch-memory-guard-2026-10-15.diff](patches/patch-memory-guard-2026-10-15.diff)）：
+  不抄粗口原文、私聊亲密内容不进印象、不用"经常/总是/从来"这类量化词
+- `sticker.collectCriteria` 里两处遗留的"高中生"改为"大学生"（备份 `config.json.bak-pre-collectcrit21`）
+
+### 仓库维护
+
+- 服务器侧的两个新补丁纳入本仓库 `patches/`，与线上 `.diff` 逐字节一致（sha256 已核对），
+  用法与验证步骤见 [patches/README.md](patches/README.md)
+- 语音模型属第三方成果（CC-BY-NC、禁止商用、不得二次配布），署名与协议要求写进
+  [NOTICE.md](NOTICE.md) 与 [千早爱音-语音模型.md](千早爱音-语音模型.md)
 
 ## 2026-10-14
 
