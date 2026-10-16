@@ -21,10 +21,14 @@
 | [SnowLuma](https://github.com/SnowLuma/SnowLuma) | OneBot 协议端框架 | 遵循项目自身声明的许可 |
 | [OneBot v11](https://github.com/botuniverse/onebot-11) | 机器人对接协议规范 | 遵循项目自身声明的许可 |
 | [DeepSeek](https://platform.deepseek.com) | 对话模型服务 | 服务条款归深度求索公司 |
+| [博查 Bocha](https://bochaai.com/) | 联网搜索（`web_search` 的后端） | 服务条款归其运营方 |
+| [硅基流动 SiliconFlow](https://siliconflow.cn/) | 语音转文字（`FunAudioLLM/SenseVoiceSmall`）与图片生成（`Tongyi-MAI/Z-Image-Turbo`） | 服务条款归其运营方；模型遵循各自作者声明的许可 |
 | [阿里云轻量应用服务器](https://cn.aliyun.com/product/swas) | 运行环境 | 服务条款归阿里云 |
 | [Node.js](https://nodejs.org/) | 机器人运行时 | MIT 许可，版权归 OpenJS Foundation 及贡献者 |
 | [Docker](https://www.docker.com/) | 协议端容器运行时 | 各组件遵循自身许可，商标归 Docker, Inc. |
 | [Ubuntu](https://ubuntu.com/) | 服务器操作系统 | 系统组件遵循各自开源许可，商标归 Canonical |
+| [FFmpeg](https://ffmpeg.org/) | 语音 / 音频转码（"听语音"依赖它） | LGPL 或 GPL，取决于构建选项 |
+| [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) | 语音合成框架（自建 TTS 用它的 API 推理） | 遵循项目自身声明的许可 |
 | 千早爱音语音模型（GPT-SoVITS） | 语音合成（可选） | **CC-BY-NC 4.0**，作者 **花咲川楽奈**；禁止商用、不得二次配布 |
 
 此外：

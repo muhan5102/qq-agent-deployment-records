@@ -195,7 +195,7 @@ curl -sS -m 10 -H "authorization: Bearer $T" -H 'content-type: application/json'
 | 人设 | 角色卡约 6.3 千字（21 岁大学生设定），附加规则约 2.9 千字 |
 | 交流策略 / 参与度 | `legacy`（原版群友）/ medium |
 | 响应概率 | 0%（保守档；被 @ / 命中关键词 / 私聊直回，普通群消息暂不触发） |
-| 消息节奏 | 思考等待 **5～15 秒**，分条间隔 2.5～7 秒，单轮通常 1 条、最多 2 条 |
+| 消息节奏 | 思考等待 **10～15 秒**，分条间隔 **5～8 秒**，单轮通常 1 条、最多 2 条 |
 | 发送闸门 | 每分钟 15 条 / 每小时 180 条（防模型抽风，平时碰不到） |
 | 自主节奏 `pacing` | **关闭**（2026-10-15）：它会隔一段时间自己醒过来补话，与"只在有人聊且接得上时开口"冲突 |
 | 对话模式 | `lifecycle`（统一会话生命周期） |
@@ -232,10 +232,17 @@ curl -sS -m 10 -H "authorization: Bearer $T" -H 'content-type: application/json'
 - [SnowLuma](https://github.com/SnowLuma/SnowLuma)：OneBot 协议端框架；本项目部署时使用 Docker Hub 上的镜像 `motricseven7/snowluma`（该串是 Docker Hub 的镜像路径，与 GitHub 仓库 `SnowLuma/SnowLuma` 分属两个平台，不是同一处引用）
 - [OneBot v11 协议规范](https://github.com/botuniverse/onebot-11)：机器人对接协议
 - [DeepSeek](https://platform.deepseek.com)：对话模型服务
+- [博查](https://bochaai.com/)：联网搜索
+- [硅基流动](https://siliconflow.cn/)：语音转文字（`SenseVoiceSmall`）与图片生成（`Z-Image-Turbo`）
 - [阿里云](https://cn.aliyun.com/)：服务器与网络环境
 - [Node.js](https://nodejs.org/)：机器人运行时
 - [Docker](https://www.docker.com/)：协议端容器运行时
 - [Ubuntu](https://ubuntu.com/)：服务器操作系统（22.04 LTS）
+- [FFmpeg](https://ffmpeg.org/)：语音 / 音频转码（"听语音"依赖它）
+- [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS)：语音合成框架；声音模型是第三方公开分享的作品，
+  由 **花咲川楽奈**（[Bilibili 主页](https://space.bilibili.com/40008084)）训练并分享，
+  协议 **CC-BY-NC 4.0**（禁止商用、不得二次配布），**权重不在本仓库**
+  （来源、参数与署名见 [千早爱音-语音模型.md](千早爱音-语音模型.md)）
 - 角色「千早爱音」出自《[BanG Dream! It's MyGO!!!!!](https://anime.bang-dream.com/mygo/)》（[系列官网](https://bang-dream.com/)、[官方游戏《BanG Dream! Our Notes》官网](https://bdon.biligames.com/)），版权归 [Bushiroad](https://bushiroad.com/) 及相关权利人
 - 设定资料参考：[萌娘百科](https://zh.moegirl.org.cn/%E5%8D%83%E6%97%A9%E7%88%B1%E9%9F%B3)、[百度百科](https://baike.baidu.com/item/%E5%8D%83%E6%97%A9%E7%88%B1%E9%9F%B3) 对应条目
 - 部署流程参考：小黑盒社区公开教程《在自己 QQ 群里养一个 AI 群友：qq-agent-plus 保姆级部署教程》（作者 bbbgd，[原文链接](https://www.xiaoheihe.cn/app/bbs/link/43197277b4fa)）

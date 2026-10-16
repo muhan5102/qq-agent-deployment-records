@@ -220,7 +220,7 @@ For intermediate checks and error handling, see section 6 of the
 | Persona | Role card ≈ 6.3k characters (21-year-old university student), additional rules ≈ 2.9k characters |
 | Behaviour profile / participation | `legacy` (original group-member style) / medium |
 | Response probability | 0% (conservative preset; always replies to mentions, keyword hits and private chats, ordinary group messages do not trigger yet) |
-| Message pacing | Thinking delay **5–15 s**, 2.5–7 s between split messages, usually 1 message per turn, at most 2 |
+| Message pacing | Thinking delay **10–15 s**, **5–8 s** between split messages, usually 1 message per turn, at most 2 |
 | Send throttle | 15 messages/minute and 180 messages/hour (a guard against runaway output; normal chat never reaches it) |
 | Autonomous pacing `pacing` | **Disabled** (2026-10-15): it made the bot wake up on its own and add a line, which conflicts with "only speak when others are talking and it fits" |
 | Conversation mode | `lifecycle` (unified session lifecycle) |
@@ -260,10 +260,17 @@ authors and maintainers:
   Hub image path — a different platform from the GitHub repository `SnowLuma/SnowLuma`)
 - [OneBot v11 specification](https://github.com/botuniverse/onebot-11): the protocol used
 - [DeepSeek](https://platform.deepseek.com): chat model service
+- [Bocha](https://bochaai.com/): web search
+- [SiliconFlow](https://siliconflow.cn/): speech-to-text (`SenseVoiceSmall`) and image generation (`Z-Image-Turbo`)
 - [Alibaba Cloud](https://cn.aliyun.com/): server and network environment
 - [Node.js](https://nodejs.org/): runtime for the bot
 - [Docker](https://www.docker.com/): container runtime for the protocol side
 - [Ubuntu](https://ubuntu.com/): server operating system (22.04 LTS)
+- [FFmpeg](https://ffmpeg.org/): audio transcoding (required to hear voice messages)
+- [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS): the speech-synthesis framework. The voice model
+  is a third-party work shared publicly by **花咲川楽奈** ([Bilibili](https://space.bilibili.com/40008084))
+  under **CC-BY-NC 4.0** (no commercial use, no redistribution); **the weights are not in this
+  repository** — see [千早爱音-语音模型.md](千早爱音-语音模型.md) (Chinese only)
 - The character "Chihaya Anon" is from
   *[BanG Dream! It's MyGO!!!!!](https://anime.bang-dream.com/mygo/)*
   ([franchise site](https://bang-dream.com/),
