@@ -1,0 +1,89 @@
+--- a/src/core/orchestrator.js
++++ b/src/core/orchestrator.js
+@@ -127,12 +127,30 @@ import { buildSlangContextForChat } from '../console/asset-observer.js';
+ import { parseInlineToolCalls } from '../tools/inline-tools.js';
+ import { createLogger, newTraceId, withTrace } from './logger.js';
+ import { ttsConfigured } from '../llm/tts-openai.js';
+ 
+ const log = createLogger('orchestrator');
+ 
++// 「写了不发」兜底：模型偶尔把要说的话写成普通文本、一次 send_message 都没调，
++// 那句话就一个字都到不了 QQ（控制台记成"本轮未回复"）。这里**不替它发**——那样会把
++// "（这轮不接）"这类内部备注也发进群——只补一句系统提醒，让它自己改用工具重发；
++// 一次运行最多提醒一次；文本明显是内部备注/判断草稿时不提醒，免得例行唤醒白烧一轮。
++const TEXT_NUDGE_PROMPT = '[系统] 你刚才把要说的话写成了普通文本，没有调用 send_message——它一个字都不会到达任何人。'
++  + '如果那是你想说的，就用 send_message 发出去（原样或改短都行）；如果确实不打算说话，直接结束，不用解释。';
++const NOTE_ONLY_TEXT = /^(（|\(|【|\[|「|《)|安静|冷场|不发言|不吭声|不接话|不接了|新消息|草稿|本次唤醒|本轮|判断[:：]|思考[:：]|系统[:：]|没人说话|没人接|没人理|按作息|静着|没什么(能|可)|没得接|没有可接/;
++
++/** 判断这段"没走工具"的文本像不像要说的话（而不是内部备注/判断草稿）。 */
++function looksLikeSpeechText(text) {
++  const t = String(text || '').trim();
++  if (t.length < 2 || t.length > 400) return false;
++  if (/^[？?。，,、…！!~;；\s]+$/.test(t)) return false;
++  if (NOTE_ONLY_TEXT.test(t)) return false;
++  if (/^(no new messages|nothing to (say|reply)|staying quiet)/i.test(t)) return false;
++  return true;
++}
++
+ function handoffParticipantIds(triggerEntries) {
+   return [...new Set((triggerEntries || [])
+     .filter((m) => !m?.self && m?.senderId !== null && m?.senderId !== undefined)
+     .map((m) => String(m.senderId).trim())
+     .filter(Boolean))];
+ }
+@@ -1893,12 +1911,13 @@ export class Orchestrator {
+ 
+     // 省 Token 模式：轮数与单次运行预算夹上限（关闭时与升级前逐字一致）
+     const runLimits = effectiveRunLimits(cfg);
+     const maxRounds = runLimits.maxRounds;
+     let finish = false;
+     let completed = false;
++    let textNudgeMessage = null;
+     let webSearchCount = 0;
+     session.activity = '';
+     session.webSearchCount = 0;
+     const markActivity = (activity) => {
+       session.activity = String(activity ?? '');
+       this.sessions.update(session.id);
+@@ -2049,12 +2068,23 @@ export class Orchestrator {
+           uiLast.inlineParsed = true;
+         }
+         this.sessions.update(session.id);
+         this.emit('session-update', session.id);
+       }
+       if (!toolCalls.length) {
++        // 只写了文本、一次 send_message 都没调：先提醒一次，让它自己用工具把话发出去。
++        // 本轮已经发过消息的运行不提醒——那种"边调工具边写草稿"是正常形态。
++        if (!textNudgeMessage && !session.sent.length && looksLikeSpeechText(rawContent)) {
++          textNudgeMessage = { role: 'user', content: TEXT_NUDGE_PROMPT };
++          messages.push(textNudgeMessage);
++          session.textNudged = true;
++          this.sessions.update(session.id);
++          this.emit('session-update', session.id);
++          log.warn(`[${chatKey}] 本轮只写了文本没调工具，已提醒一次（${String(rawContent).trim().length} 字）`);
++          continue;
++        }
+         // 没有工具调用 = 模型结束思考（文本不会发给 QQ）
+         completed = true;
+         break;
+       }
+ 
+       const toolResults = [];
+@@ -2145,14 +2175,16 @@ export class Orchestrator {
+       completed = true;
+       session.roundBudgetStopped = true;
+       session.finishReason ||= session.sent.length
+         ? '已发送内容，因本轮模型轮数用尽安全结束'
+         : '本轮模型轮数用尽，已安全结束';
+     }
++    // 提醒用的那条合成 user 消息只服务于本次请求，不进生命周期交接的转录
++    // （否则下一批会把它当成一段真实历史看到）。
+     const providerTranscriptDelta = conversationCfg.mode === 'lifecycle'
+-      ? structuredClone(messages.slice(transcriptStart))
++      ? structuredClone(messages.slice(transcriptStart).filter((m) => m !== textNudgeMessage))
+       : [];
+     // 普通 assistant 文本不会发到 QQ，它只是本次运行的内部输出。下一生命周期轮次
+     // 不应把它伪装成机器人曾经说过的话；移除后仍能完整命中上一请求的输入边界。
+     const tail = providerTranscriptDelta.at(-1);
+     const terminalReasoning = tail?.role === 'assistant' && !tail.tool_calls?.length
+       ? tail.reasoning_content

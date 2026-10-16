@@ -42,6 +42,7 @@ PATCHES=(
   "patch-memory-qq-2026-10-09.diff|src/memory/memory-global.js"
   "patch-sticker-note-40-2026-10-14.diff|src/onebot/sticker-manager.js"
   "patch-memory-guard-2026-10-15.diff|src/core/orchestrator.js"
+  "patch-text-nudge-2026-10-16.diff|src/core/orchestrator.js"
 )
 
 applied=0; pending=0; failed=0

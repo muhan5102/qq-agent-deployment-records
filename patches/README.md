@@ -13,6 +13,7 @@
 | [memory-qq-2026-10-09.diff](memory-qq-2026-10-09.diff) | `src/memory/memory-global.js` | `qq-agent-plus` v0.8.1、v0.8.3、v0.8.4、v0.8.5 | 让「对群友的全局印象」每行在昵称后带上 `(QQ 号)`，认人以号为准 |
 | [patch-sticker-note-40-2026-10-14.diff](patch-sticker-note-40-2026-10-14.diff) | `src/onebot/sticker-manager.js` | v0.8.5 | 表情备注上限 24 → 40 字，让"谁+在干什么+适合什么场合"写得完 |
 | [patch-memory-guard-2026-10-15.diff](patch-memory-guard-2026-10-15.diff) | `src/core/orchestrator.js` | v0.8.5 | 给「人物印象」整理器加约束：不抄粗口、私聊内容不进印象、不用"经常/总是"这类量化词 |
+| [patch-text-nudge-2026-10-16.diff](patch-text-nudge-2026-10-16.diff) | `src/core/orchestrator.js` | v0.8.5 | 模型把回复写成文本、没调 `send_message` 时，提醒它一次改用工具重发（不替它发） |
 
 > `sticker-collect-criteria` 已于 2026-10-10 **退役**（上游 v0.8.4 自带同一能力），
 > 见文末「已退役」一节；它的判定标准现在由配置 `sticker.collectCriteria` 承担。
@@ -146,6 +147,57 @@ systemctl --user restart qq-agent-linux
 
 1. `patch -p1 --dry-run -R < patch-memory-guard-2026-10-15.diff` 反向 dry-run 通过。
 2. 重启后新整理的印象条目里不再出现原文粗口、也不带"经常/总是"这类词。
+
+---
+
+## patch-text-nudge-2026-10-16.diff
+
+### 为什么需要它
+
+模型偶尔会把要说的话写成**普通文本**、而一次 `send_message` 都不调。按上游设计，
+普通文本只是"本次运行的内部输出"，不会发到 QQ，于是那轮就安静地结束了——
+控制台记成"本轮未回复"，会话详情里能看到一段"模型文本（不发送）"。
+
+改前量化过：最近几天 **79 次真实会话触发里有 9 次（约 11%）** 是这么掉字的，
+掉的内容有整句正常回复、也有"早上好"这种短句。而在"控制台主动唤醒"这类例行运行里，
+模型写内部判断（"没有新消息，安静结束"）却不调工具，其实是**正常形态**，不是故障。
+
+### 这个补丁做什么
+
+不替它发——程序自动把文本发出去的话，"（这轮不接）"这类内部备注也会进群。
+补丁只在"这一轮没调任何工具、也一条都没发出去"时，补一条合成 user 消息提醒它：
+
+> 你刚才把要说的话写成了普通文本，没有调用 `send_message`——它一个字都不会到达任何人。
+> 如果那是你想说的，就用 `send_message` 发出去；如果确实不打算说话，直接结束，不用解释。
+
+细节：
+
+- **一次运行最多提醒一次**，提醒后仍只写文本就照旧安静结束（不会循环）；
+- 本轮已经发过消息的运行不提醒（"边调工具边写草稿"是正常形态）；
+- 文本明显是**内部备注/判断草稿**时不提醒（开头是括号/书名号，或含"安静、冷场、
+  不发言、新消息、草稿、本次唤醒、本轮、判断：、思考：、没人说话、按作息"等词），
+  免得每天几十次例行唤醒白烧一轮；
+- 那条合成消息只进本轮请求，**不进生命周期交接的转录**（`providerTranscriptDelta` 里按引用剔除）。
+
+过滤规则是拿最近几天 310 条"没走工具的输出"回放挑出来的：收紧后能拦下约六成误报，
+同时保住全部 9 条真实掉字。按这个比例约每天 7 次会提醒（每次多一轮调用，量级 ¥0.003）。
+
+### 打补丁
+
+```bash
+cd /mnt/data/qq-agent/app
+patch -p1 < patches/patch-text-nudge-2026-10-16.diff
+./.runtime/node-v22.23.2-linux-x64/bin/node --check src/core/orchestrator.js
+systemctl --user restart qq-agent-linux
+```
+
+### 验证
+
+1. `patch -p1 --dry-run -R < patch-text-nudge-2026-10-16.diff` 反向 dry-run 通过。
+2. 部署后跑一次"回放"：用文件里的 `looksLikeSpeechText` 去过一遍最近的会话样本，
+   确认该拦的备注被拦住、该放的发言不在拦截里。
+3. 线上观察：触发时 journal 里会出现 `本轮只写了文本没调工具，已提醒一次（N 字）`，
+   会话 JSON 里相应运行带 `textNudged: true`。
 
 ---
 
