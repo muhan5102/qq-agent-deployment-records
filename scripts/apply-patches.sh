@@ -43,6 +43,11 @@ PATCHES=(
   "patch-sticker-note-40-2026-10-14.diff|src/onebot/sticker-manager.js"
   "patch-memory-guard-2026-10-15.diff|src/core/orchestrator.js"
   "patch-text-nudge-2026-10-16.diff|src/core/orchestrator.js"
+  "patch-admin-notify-mail-2026-10-16.diff|src/console/app.js"
+  "patch-incident-ui-text-2026-10-16.diff|ui/pages/features.js"
+  "patch-moment-topic-guard-2026-10-16.diff|src/features/daily-moments.js"
+  # 这条改的是 orchestrator.js 的预算超限分支，排在文本兜底那条之后（与服务器清单同序）
+  "patch-budget-mail-2026-10-16.diff|src/core/orchestrator.js"
 )
 
 applied=0; pending=0; failed=0

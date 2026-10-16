@@ -31,12 +31,50 @@ const BALANCE_FILE = path.join(DATA_DIR, 'balance-daily.json');
 const MAIL_FILE = process.env.QQ_AGENT_MAIL_CRED || '/mnt/data/qq-agent/mail-cred.json';
 // 告警转发的状态（已转发过哪些、上次看到哪），以及"只转发这么久的"下限
 const INCIDENT_STATE_FILE = path.join(DATA_DIR, 'incident-notify.json');
+// 程序侧排队的"管理员通知"（更新提示 / 好友申请 / 好友候选 / 审批回执）由本脚本发信
+const MAIL_OUTBOX_FILE = path.join(DATA_DIR, 'mail-outbox.json');
+const MAIL_OUTBOX_FAIL_MAX = 6;
+// 当日预算超限状态（程序写的，日报里带一行）
+const BUDGET_ALERT_FILE = path.join(DATA_DIR, 'budget-alert.json');
 const INCIDENT_MAX_AGE_MS = 24 * 3600 * 1000;
 // 只有这些级别**立刻**发邮件；其余级别（默认只剩 warning）攒进每天 9:00 的日报里一起看。
 // 用户 2026-10-16 定：严重实时、警告日汇总。
+// 立刻发的等级。环境变量优先；否则按控制台那个「警告级也通知」勾选决定要不要带上 warning
+// —— 这个勾选以前只管 QQ 私聊告警，QQ 通道关掉后改由这里生效（勾了就连警告也单发一封）。
 const INCIDENT_IMMEDIATE = new Set(
-  String(process.env.QQ_AGENT_INCIDENT_IMMEDIATE || 'severe').split(',').map((s) => s.trim()).filter(Boolean)
+  String(process.env.QQ_AGENT_INCIDENT_IMMEDIATE
+    || `critical,severe,error${(readJson(path.join(DATA_DIR, 'config.json'), {}) || {})?.incidentPilot?.notifyWarnings === true ? ',warning' : ''}`)
+    .split(',').map((s) => s.trim()).filter(Boolean)
 );
+// 等级标签：程序里实际用到的是 critical / error / warning / info（以前只认 severe，
+// 于是"错误"被误标成"警告"）。未知等级原样显示，不吞掉。
+const SEVERITY_LABEL = { critical: '严重', severe: '严重', error: '错误', warning: '警告', info: '信息' };
+const severityLabel = (v) => SEVERITY_LABEL[String(v || '')] || String(v || '未知');
+const SEVERITY_STYLE = {
+  critical: { bg: '#fef2f2', fg: '#b91c1c' },
+  severe: { bg: '#fef2f2', fg: '#b91c1c' },
+  error: { bg: '#fff1f2', fg: '#be123c' },
+  warning: { bg: '#fff7ed', fg: '#b45309' },
+  info: { bg: '#f3f4f6', fg: '#4b5563' }
+};
+function severityStyle(v) { return SEVERITY_STYLE[String(v || '')] || SEVERITY_STYLE.info; }
+/** "严重 1 条 · 错误 2 条 · 警告 3 条"（按等级从重到轻） */
+function severitySummary(list) {
+  const counts = new Map();
+  for (const i of list) {
+    const k = String(i.severity || 'unknown');
+    counts.set(k, (counts.get(k) || 0) + 1);
+  }
+  const order = ['critical', 'severe', 'error', 'warning', 'info'];
+  const parts = [];
+  for (const k of order) {
+    if (!counts.has(k)) continue;
+    parts.push(`${severityLabel(k)} ${counts.get(k)} 条`);
+    counts.delete(k);
+  }
+  for (const [k, n] of counts) parts.push(`${severityLabel(k)} ${n} 条`);
+  return parts.join(' · ');
+}
 const RETAIN_DAYS = 120;
 const REPORT_HOUR = 9;          // 上海时间几点发小结
 const TZ = 'Asia/Shanghai';
@@ -250,7 +288,7 @@ async function fetchIncidents() {
 function describeIncident(i) {
   const at = new Date(Number(i.firstAt) || Date.now())
     .toLocaleString('zh-CN', { hour12: false, timeZone: TZ });
-  const sev = i.severity === 'severe' ? '严重' : '警告';
+  const sev = severityLabel(i.severity);
   const merged = Number(i.count) > 1 ? `（同类合并 ${i.count} 次）` : '';
   const msg = String(i.message || '').replace(/\s+/g, ' ').slice(0, 400);
   return `【${sev}】${at}  ${i.source || ''}  ${i.chatKey || ''}${merged}\n${msg}`;
@@ -280,18 +318,21 @@ async function forwardIncidents({ dry = false } = {}) {
   if (!dry && fresh.length) {
     const analysis = await analyzeIncidents(fresh);
     const body = fresh.map(describeIncident).join('\n\n────────\n\n');
+    const worst = ['critical', 'severe', 'error', 'warning', 'info']
+      .find((lv) => fresh.some((i) => String(i.severity) === lv)) || '';
+    const worstLabel = severityLabel(worst);
     await sendMail({
-      subject: `[QQ-bot][严重] 异常 ${fresh.length} 条`,
+      subject: `[QQ-bot][${worstLabel}] 异常 ${fresh.length} 条`,
       html: buildSevereHtml({ incidents: fresh, analysis }),
       text: [
-        `[QQ-bot] 严重异常提醒`,
+        `[QQ-bot] ${worstLabel}异常提醒`,
         `${new Date().toLocaleString('zh-CN', { timeZone: TZ, hour12: false })}`,
         '',
-        `检测到 ${fresh.length} 条严重异常（控制台「异常处理」页可以确认 / 解决）：`,
+        `检测到 ${fresh.length} 条需立即处理的异常（控制台「异常处理」页可以确认 / 解决）：`,
         '',
         body,
         analysis ? `\nAI 分析：\n${analysis}\n` : '',
-        '附注：本邮件由服务器上的定时任务自动生成；警告级异常不单独发，每天 9:00 汇总在运行日报里。'
+        '附注：本邮件由服务器上的定时任务自动生成；严重 / 错误级立刻发，警告级不单独发、每天 9:00 汇总在运行日报里。'
       ].join('\n')
     });
   }
@@ -328,7 +369,7 @@ function fmtTime(at) {
 function renderIncidents(list, limit = 8) {
   const lines = [];
   for (const i of list.slice(0, limit)) {
-    const sev = i.severity === 'severe' ? '严重' : '警告';
+    const sev = severityLabel(i.severity);
     const msg = String(i.message || '').replace(/\s+/g, ' ').slice(0, 90);
     lines.push(`  · ${fmtTime(i.firstAt)}  ${sev}  ${i.source || '-'}  ${msg}`);
   }
@@ -351,7 +392,7 @@ async function analyzeIncidents(list) {
   const base = String(provider.baseURL || '').replace(/\/+$/, '');
   if (!key || !base || !list.length) return null;
   const detail = list.slice(0, 12).map((i) => {
-    const sev = i.severity === 'severe' ? '严重' : '警告';
+    const sev = severityLabel(i.severity);
     const msg = String(i.message || '').replace(/\s+/g, ' ').slice(0, 300);
     return `- [${sev}] ${fmtTime(i.firstAt)} 来源=${i.source || '-'} 次数=${i.count || 1}\n  ${msg}`;
   }).join('\n');
@@ -419,8 +460,7 @@ function buildReport({ dayKey, hist, balance, prevBalance, incidents = [], analy
   if (!incidents.length) {
     lines.push('  该时段无异常。');
   } else {
-    const severe = incidents.filter((i) => i.severity === 'severe').length;
-    lines.push(`  警告 ${incidents.length - severe} 条，严重 ${severe} 条。`);
+    lines.push(`  ${severitySummary(incidents)}。`);
     lines.push(...renderIncidents(incidents));
     if (analysis) {
       lines.push('');
@@ -429,6 +469,16 @@ function buildReport({ dayKey, hist, balance, prevBalance, incidents = [], analy
     }
   }
   lines.push('');
+
+  // 四、需要你注意：只在"确实发生过"时才出现（平时日报不多这一节）
+  const budgetLine = budgetAlertLine(dayKey);
+  const failureLine = mailFailureLine();
+  if (budgetLine || failureLine) {
+    lines.push('四、需要你注意');
+    if (budgetLine) lines.push(...budgetLine.split('\n'));
+    if (failureLine) lines.push(failureLine);
+    lines.push('');
+  }
 
   lines.push('附注');
   lines.push('  · 花费按官方价与 token 用量估算，不是账单金额；余额为服务商接口返回的真实值。');
@@ -488,8 +538,8 @@ function htmlRows(rows) {
 function htmlIncidents(list) {
   return list
     .map((i) => {
-      const severe = i.severity === 'severe';
-      const tag = `<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:12px;background:${severe ? '#fef2f2' : '#fff7ed'};color:${severe ? '#b91c1c' : '#b45309'};">${severe ? '严重' : '警告'}</span>`;
+      const st = severityStyle(i.severity);
+      const tag = `<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:12px;background:${st.bg};color:${st.fg};">${severityLabel(i.severity)}</span>`;
       const msg = String(i.message || '').replace(/\s+/g, ' ').slice(0, 200);
       return `<div style="padding:10px 0;border-bottom:1px solid #f3f4f6;">
       <div style="font-family:${MONO};font-size:12px;color:#6b7280;">${esc(fmtTime(i.firstAt))} ${tag} ${esc(i.source || '')}</div>
@@ -540,8 +590,7 @@ function buildReportHtml({ dayKey, hist, balance, prevBalance, incidents = [], a
   if (!incidents.length) {
     incidentHtml = `<div style="font-family:${FONT};font-size:13px;color:#9ca3af;padding:12px 0;">该时段无异常。</div>`;
   } else {
-    const severe = incidents.filter((i) => i.severity === 'severe').length;
-    incidentHtml = `<div style="font-family:${FONT};font-size:13px;color:#6b7280;padding:10px 0 2px;">警告 ${incidents.length - severe} 条，严重 ${severe} 条</div>`
+    incidentHtml = `<div style="font-family:${FONT};font-size:13px;color:#6b7280;padding:10px 0 2px;">${severitySummary(incidents)}</div>`
       + htmlIncidents(incidents)
       + (analysis ? htmlAnalysis(analysis) : '');
   }
@@ -557,11 +606,11 @@ function buildReportHtml({ dayKey, hist, balance, prevBalance, incidents = [], a
 }
 
 function buildSevereHtml({ incidents, analysis }) {
-  const body = htmlSection('严重异常', htmlIncidents(incidents) + (analysis ? htmlAnalysis(analysis) : ''))
-    + htmlSection('说明', `<div style="font-family:${FONT};font-size:13px;line-height:1.9;color:#6b7280;padding:10px 0;">警告级异常不单独发送，每天 9:00 汇总在运行日报里；本封只发严重级。控制台「异常处理」页可以确认 / 解决。</div>`);
+  const body = htmlSection('需立即处理的异常', htmlIncidents(incidents) + (analysis ? htmlAnalysis(analysis) : ''))
+    + htmlSection('说明', `<div style="font-family:${FONT};font-size:13px;line-height:1.9;color:#6b7280;padding:10px 0;">严重 / 错误级异常立刻发这一封；警告级不单独发送，每天 9:00 汇总在运行日报里。控制台「异常处理」页可以确认 / 解决。</div>`);
   return mailShell({
     accent: '#dc2626',
-    title: '严重异常提醒',
+    title: '异常提醒',
     subtitle: new Date().toLocaleString('zh-CN', { timeZone: TZ, hour12: false }),
     body,
     footnote: FOOTNOTE
@@ -569,6 +618,79 @@ function buildSevereHtml({ incidents, analysis }) {
 }
 
 const now = shanghaiParts();
+
+/**
+ * 程序侧排队的"管理员通知"（更新提示 / 好友申请 / 好友候选 / 审批回执）→ 邮件。
+ * 每次跑都处理一次，所以最长延迟就是定时器的间隔（当前 10 分钟）。
+ * 发失败的留在队列里下次重试，连续失败到 MAIL_OUTBOX_FAIL_MAX 次就停手（免得永远卡着），
+ * 同时把状态写进 data/mail-outbox.json，日报里会带一句。
+ */
+async function forwardMailOutbox({ dry = false } = {}) {
+  const box = readJson(MAIL_OUTBOX_FILE, null);
+  const items = Array.isArray(box?.items) ? box.items : [];
+  if (!items.length) return { sent: 0, pending: 0, failed: 0 };
+  const remain = [];
+  let sent = 0;
+  let failed = 0;
+  for (const item of items) {
+    const title = String(item.subject || '通知');
+    const at = new Date(Number(item.at) || Date.now()).toLocaleString('zh-CN', { hour12: false, timeZone: TZ });
+    if (dry) {
+      console.log(`（演练）会发通知邮件：${title}`);
+      continue;
+    }
+    try {
+      await sendMail({
+        subject: `[QQ-bot] ${title}`,
+        html: mailShell({
+          accent: '#2563eb',
+          title,
+          subtitle: at,
+          body: htmlSection('内容', `<div style="font-family:${FONT};font-size:13px;line-height:1.9;color:#111827;white-space:pre-wrap;">${esc(String(item.text || ''))}</div>`),
+          footnote: FOOTNOTE
+        }),
+        text: [`[QQ-bot] ${title}`, at, '', String(item.text || '')].join('\n')
+      });
+      sent += 1;
+    } catch (error) {
+      failed += 1;
+      remain.push({
+        ...item,
+        failures: (Number(item.failures) || 0) + 1,
+        lastError: String(error?.message ?? error).slice(0, 200)
+      });
+    }
+  }
+  if (!dry) {
+    const keep = remain.filter((i) => (Number(i.failures) || 0) < MAIL_OUTBOX_FAIL_MAX);
+    const dropped = remain.length - keep.length;
+    writeJson(MAIL_OUTBOX_FILE, { items: keep, lastRunAt: Date.now() });
+    if (dropped > 0) {
+      console.log(`[通知队列] ${dropped} 条连续失败 ${MAIL_OUTBOX_FAIL_MAX} 次，已放弃：${remain[0]?.lastError || ''}`);
+    }
+    if (sent) console.log(`[${new Date().toISOString()}] 已发 ${sent} 封通知邮件`);
+    if (failed) console.log(`[通知队列] ${failed} 条投递失败，留在队列里下次重试`);
+  }
+  return { sent, pending: remain.length, failed };
+}
+
+/** 当日预算超限提示（程序在超限当天写 data/budget-alert.json）。 */
+function budgetAlertLine(dayKey) {
+  const st = readJson(BUDGET_ALERT_FILE, null);
+  if (!st || String(st.dayKey || '') !== String(dayKey || '')) return '';
+  const unpriced = Number(st.unpricedRuns) > 0 ? `（另有 ${st.unpricedRuns} 次运行未计价）` : '';
+  const policy = st.onExceed === 'block' ? '超限策略＝停止：新消息不处理' : '超限策略＝降级：群里只回应 @';
+  return `  当日花费已达上限：估算 ¥${Number(st.spentYuan || 0).toFixed(2)} / ¥${Number(st.limitYuan || 0)}${unpriced}；${policy}。`;
+}
+
+/** 上次转发/发送失败的状态（写进 incident-notify.json，日报里提醒一句）。 */
+function mailFailureLine() {
+  const st = readJson(INCIDENT_STATE_FILE, null) || {};
+  if (!st.lastFailureAt) return '';
+  const at = new Date(Number(st.lastFailureAt)).toLocaleString('zh-CN', { hour12: false, timeZone: TZ });
+  const where = st.lastFailureWhere === 'outbox' ? '通知邮件' : '告警邮件';
+  return `  ⚠ ${where}上次投递失败：${at}　${String(st.lastFailureError || '').slice(0, 120)}`;
+}
 
 if (process.argv.includes('--test-mail')) {
   const hist = readJson(HISTORY_FILE, {});
@@ -614,6 +736,10 @@ if (DRY) {
   if (inc.error) console.log(`\n[告警转发] 查询失败：${inc.error}`);
   else if (inc.seeded) console.log(`\n[告警转发] 尚未开始（当前 ${inc.total} 条），正式运行会把它们记为"已见"、不补发`);
   else console.log(`\n[告警转发] 现在有 ${inc.fresh.length} 条新告警待发（当前共 ${inc.total} 条）`);
+  const boxDry = await forwardMailOutbox({ dry: true }).catch(() => ({ pending: 0 }));
+  console.log(`[通知队列] 演练：队列里 ${boxDry.pending} 条待发通知邮件`);
+  if (budgetAlertLine(yKey)) console.log(`[预算] ${budgetAlertLine(yKey).trim()}`);
+  if (mailFailureLine()) console.log(`[投递] ${mailFailureLine().trim()}`);
   process.exit(0);
 }
 
@@ -626,9 +752,35 @@ try {
   if (inc.fresh.length) console.log(`[${new Date().toISOString()}] 已转发 ${inc.fresh.length} 条新告警`);
 } catch (error) {
   console.log(`[${new Date().toISOString()}] 告警转发失败：${error?.message ?? error}`);
+  // 让日报能提醒"有东西没发出去"（状态文件本来就存在，加两个字段，不动 seen）
+  try {
+    const st = readJson(INCIDENT_STATE_FILE, null) || {};
+    writeJson(INCIDENT_STATE_FILE, {
+      ...st,
+      lastFailureAt: Date.now(),
+      lastFailureWhere: 'incident',
+      lastFailureError: String(error?.message ?? error).slice(0, 200)
+    });
+  } catch { /* 状态写不进去就算了 */ }
 }
 
-// 3) 到点发小结（每天只发一次，发完在台账里记一笔）
+// 3) 程序侧排队的通知（更新 / 好友申请 …）也在这里发出去
+try {
+  await forwardMailOutbox();
+} catch (error) {
+  console.log(`[${new Date().toISOString()}] 通知队列处理失败：${error?.message ?? error}`);
+  try {
+    const st = readJson(INCIDENT_STATE_FILE, null) || {};
+    writeJson(INCIDENT_STATE_FILE, {
+      ...st,
+      lastFailureAt: Date.now(),
+      lastFailureWhere: 'outbox',
+      lastFailureError: String(error?.message ?? error).slice(0, 200)
+    });
+  } catch { /* 同上 */ }
+}
+
+// 4) 到点发小结（每天只发一次，发完在台账里记一笔）
 const reportKey = now.dayKey;
 const bh = readJson(BALANCE_FILE, {});
 if (now.hour === REPORT_HOUR && !bh[reportKey]?.reportedAt) {

@@ -1,0 +1,60 @@
+--- a/src/core/orchestrator.js
++++ b/src/core/orchestrator.js
+@@ -111,13 +111,12 @@ function proactiveWindowState(raw, now) {
+ 
+ import { safeSlice } from './util.js';
+ import { canRun, chatAllowed } from './access.js';
+ import { assertTimeAllowed, isTimeActive, TimeControlError, timeUntilActive, watchTimeWindow, withTimeScope } from './time-gate.js';
+ import { vendorOfConfig, vendorOfBaseUrl } from '../pricing/model-prices.js';
+ import { budgetStatus } from './budget.js';
+-import { readOwnerUin } from './notify-owner.js';
+ import { buildReminderNote, reminderNoteCost } from './reminders.js';
+ import { ZONE_OFFSET_MS, minuteOfDayInZone, randInt, createEventBus, todayKey } from './util.js';
+ import { buildSystemPrompt, buildUserPrompt, resolveContextTier } from '../llm/prompt.js';
+ import { chatCompletion, chatCompletionWithRetry, addUsage, emptyUsage, isRetryableError } from '../llm/llm.js';
+ import { buildToolDefs, toOpenAiTools, executeTool, platformToolAllowed } from '../tools/tools.js';
+ import { normalizeMid } from '../tools/tools-core.js';
+@@ -958,27 +957,33 @@ export class Orchestrator {
+     }
+     try { await this.sender.sendTextBatch(chatKey, ['今天的额度用完了，明天再聊'], {}); }
+     catch { /* 发送失败不阻断 */ }
+   }
+ 
+   /**
+-   * 超限当天私聊管理员一次（改进方案 #8/J.3：去重键 = dayKey，内存态即可 —— 重启最多重发一条，
+-   * 不值得为此落盘）。发送走主进程 sender（WS 通道）；失败静默，不影响拦截逻辑。
++   * 超限当天记一笔（改进方案 #8/J.3：去重键 = dayKey，内存态即可 —— 重启最多重发一条，
++   * 不值得为此落盘）。
++   *
++   * 2026-10-16 改：不再私聊管理员 —— 那条会落进"和角色的私聊"里，既出戏、又会被角色自己的
++   * 上下文读到。现在只写 data/budget-alert.json，由 usage-daily.mjs 在 9:00 的日报里带一行；
++   * 控制台「用量」页照旧能看当日花费。写失败不影响拦截逻辑。
+    */
+   #maybeNotifyBudgetExceeded(budget) {
+     const day = todayKey();
+     if (this.#budgetNotifiedDay === day) return;
+     this.#budgetNotifiedDay = day;
+-    const owner = readOwnerUin(getConfig());
+-    if (!/^\d{5,15}$/.test(owner)) return;
+-    const unpriced = budget.unpricedRuns > 0 ? `（另有 ${budget.unpricedRuns} 次运行未计价，未计入金额）` : '';
+-    const text = `每日花费已达上限：估算已用 ¥${budget.spentYuan.toFixed(2)} / ¥${budget.limitYuan}${unpriced}。`
+-      + (budget.onExceed === 'block'
+-        ? '超限策略＝停止：新消息将不处理，明天自动恢复。'
+-        : '超限策略＝降级：群里只回应 @，私聊不受限，明天自动恢复。');
+-    Promise.resolve(this.sender?.sendTextBatch?.(`private:${owner}`, [text], {})).catch(() => { /* 通知失败静默 */ });
++    try {
++      fs.writeFileSync(path.join(DATA_DIR, 'budget-alert.json'), JSON.stringify({
++        dayKey: day,
++        at: Date.now(),
++        spentYuan: Number(budget.spentYuan) || 0,
++        limitYuan: Number(budget.limitYuan) || 0,
++        onExceed: String(budget.onExceed || ''),
++        unpricedRuns: Number(budget.unpricedRuns) || 0
++      }), { encoding: 'utf8', mode: 0o600 });
++    } catch { /* 写不进去不影响拦截逻辑 */ }
+   }
+ 
+   #discardWaiting(sessionId) {
+     if (!sessionId) return;
+     const s = this.sessions.current.get(sessionId);
+     this.sessions.discard(sessionId);

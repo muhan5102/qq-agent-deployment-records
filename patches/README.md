@@ -10,10 +10,14 @@
 
 | 补丁 | 目标文件 | 适用于 | 作用 |
 |---|---|---|---|
-| [memory-qq-2026-10-09.diff](memory-qq-2026-10-09.diff) | `src/memory/memory-global.js` | `qq-agent-plus` v0.8.1、v0.8.3、v0.8.4、v0.8.5 | 让「对群友的全局印象」每行在昵称后带上 `(QQ 号)`，认人以号为准 |
+| [patch-memory-qq-2026-10-09.diff](patch-memory-qq-2026-10-09.diff) | `src/memory/memory-global.js` | `qq-agent-plus` v0.8.1、v0.8.3、v0.8.4、v0.8.5 | 让「对群友的全局印象」每行在昵称后带上 `(QQ 号)`，认人以号为准 |
 | [patch-sticker-note-40-2026-10-14.diff](patch-sticker-note-40-2026-10-14.diff) | `src/onebot/sticker-manager.js` | v0.8.5 | 表情备注上限 24 → 40 字，让"谁+在干什么+适合什么场合"写得完 |
 | [patch-memory-guard-2026-10-15.diff](patch-memory-guard-2026-10-15.diff) | `src/core/orchestrator.js` | v0.8.5 | 给「人物印象」整理器加约束：不抄粗口、私聊内容不进印象、不用"经常/总是"这类量化词 |
 | [patch-text-nudge-2026-10-16.diff](patch-text-nudge-2026-10-16.diff) | `src/core/orchestrator.js` | v0.8.5 | 模型把回复写成文本、没调 `send_message` 时，提醒它一次改用工具重发（不替它发） |
+| [patch-admin-notify-mail-2026-10-16.diff](patch-admin-notify-mail-2026-10-16.diff) | `src/console/app.js` | v0.8.5 | 管理员通知（异常/更新/好友申请/审批回执）从"私聊 QQ"改成"排队等邮件"，QQ 通道默认关 |
+| [patch-budget-mail-2026-10-16.diff](patch-budget-mail-2026-10-16.diff) | `src/core/orchestrator.js` | v0.8.5 | 每日花费超限不再私聊管理员：写 `data/budget-alert.json`，由日报带一行 |
+| [patch-incident-ui-text-2026-10-16.diff](patch-incident-ui-text-2026-10-16.diff) | `ui/pages/features.js` | v0.8.5 | 控制台「异常」页文案跟上（告警收件人走邮件、待发含义、警告级勾选） |
+| [patch-moment-topic-guard-2026-10-16.diff](patch-moment-topic-guard-2026-10-16.diff) | `src/features/daily-moments.js` + `src/llm/moment-prompt.js` 等 4 个文件 | v0.8.5 | 「每日动态」加发布禁区（时政/社会争议/色情一律不进说说）+ 关键词硬闸门 + 可见范围只允许好友可见 + 素材改成"群里的小事或自己编的乐队小剧场" |
 
 > `sticker-collect-criteria` 已于 2026-10-10 **退役**（上游 v0.8.4 自带同一能力），
 > 见文末「已退役」一节；它的判定标准现在由配置 `sticker.collectCriteria` 承担。
@@ -37,9 +41,44 @@ bash apply-patches.sh --restart  # 补齐后重启机器人主体（不动容器
 "全新升级后"两种状态下都安全，重复执行没有副作用（2026-10-15 用一份还原成升级后状态的临时
 代码树实测通过）。
 
+### 权威副本在哪（重要）
+
+服务器上的 `/mnt/data/qq-agent/apply-patches.sh` 是**权威清单**：它的数组顺序 = 补丁执行顺序，
+而且比仓库这份**多两条本地私有补丁**（只服务于本地配置，全文放在未纳管目录 `work/patches/`，
+细节见本地 `LOCAL-NOTES.md`，不在仓库里展开）。
+
+- 升级后只需在服务器上跑 `bash apply-patches.sh --restart`，不需要把仓库这份拷过去覆盖它
+  （拷过去会丢掉那两条私有补丁）。
+- 万一服务器重装/补丁目录丢了：仓库这份 + `work/patches/` 那两条 = 完整清单；
+  按服务器那份清单的顺序把这两条插回原位置（紧跟 `patch-text-nudge` 之后）即可。
+
+### 升级前先跑一次演练（`scripts/patch-replay-drill.sh`）
+
+升级会把 `app/` 整树换成上游版本，补丁链一旦有顺序错、上下文对不上、漏登记，当天就会卡住。
+这个脚本**只动临时目录、不碰线上代码**，把清单里所有补丁涉及的文件复制一份：
+先逆序反向应用（还原成上游原样）、再正序正向重打，最后与线上文件逐字节比对。
+
+```bash
+bash patch-replay-drill.sh
+```
+
+2026-10-16 实测：10 条补丁、11 个文件，反向 + 正向 + md5 比对全部通过。
+**建议每次升级前后各跑一次**（升级前确认链子是好的，升级后确认真的都打上了）。
+
+### 升级 checklist
+
+1. `cd /mnt/data/qq-agent && bash apply-patches.sh`（先看一眼"已生效 N / 需处理 0"）
+2. 备份 `data/config.json` 与 `app/src`（升级脚本自己也会留 `data/deploy-backups/`）
+3. 跑升级（`deploy-all.sh`，rsync 会覆盖 `app/`）
+4. `bash apply-patches.sh --restart` → 应为"本次补打 N / 需处理 0"，随后 `node --check` 由脚本自带
+5. `bash patch-replay-drill.sh` → 应打印"演练通过"
+6. 抽查关键功能：控制台能开（3210）、`/api/daily-moments/status` 正常、
+   本地那两条私有补丁对应的功能正常（自查方法见本地 `LOCAL-NOTES.md`）、
+   异常页文案是"告警收件人（邮件）"（说明 UI 补丁生效）
+
 ---
 
-## memory-qq-2026-10-09.diff
+## patch-memory-qq-2026-10-09.diff
 
 ### 为什么需要它
 
@@ -60,7 +99,7 @@ QQ 号是稳定且唯一的，而系统其它部分（人物档案、记忆文�
 
 ```bash
 cd /mnt/data/qq-agent/app
-patch -p1 < patches/memory-qq-2026-10-09.diff      # 路径按实际存放位置替换
+patch -p1 < patches/patch-memory-qq-2026-10-09.diff      # 路径按实际存放位置替换
 ./.runtime/node-v22.23.2-linux-x64/bin/node --check src/memory/memory-global.js
 systemctl --user restart qq-agent-linux
 ```
@@ -70,7 +109,7 @@ systemctl --user restart qq-agent-linux
 
 ### 验证
 
-1. 补丁与线上文件是否一致：`patch -p1 --dry-run -R < memory-qq-2026-10-09.diff`
+1. 补丁与线上文件是否一致：`patch -p1 --dry-run -R < patch-memory-qq-2026-10-09.diff`
    反向 dry-run 通过，说明该补丁与当前文件逐字吻合。
 2. 效果：重启后，运行时拼出的【对群友的全局印象】每行形如
    `- 昵称(QQ 123456)：[09-22] …`；管理员那行仍是 `昵称（QQ 123456，就是管理员本人）`。
@@ -78,7 +117,7 @@ systemctl --user restart qq-agent-linux
 ### 回退
 
 ```bash
-patch -p1 -R < memory-qq-2026-10-09.diff
+patch -p1 -R < patch-memory-qq-2026-10-09.diff
 systemctl --user restart qq-agent-linux
 ```
 
@@ -198,6 +237,67 @@ systemctl --user restart qq-agent-linux
    确认该拦的备注被拦住、该放的发言不在拦截里。
 3. 线上观察：触发时 journal 里会出现 `本轮只写了文本没调工具，已提醒一次（N 字）`，
    会话 JSON 里相应运行带 `textNudged: true`。
+
+---
+
+## patch-admin-notify-mail / patch-budget-mail / patch-incident-ui-text（2026-10-16）
+
+### 为什么需要它
+
+程序给管理员的通知以前一律**私聊发 QQ**（`incident-pilot` 的异常告警、更新提示、好友申请、
+好友候选、审批回执）。那条会落进"和角色的私聊"里：既出戏，又会被角色自己的上下文读到、
+甚至接茬。用户明确要求"这些也转邮件"。
+
+### 三个补丁各改什么
+
+| 补丁 | 作用 |
+|---|---|
+| `patch-admin-notify-mail` | `sendIdentityAdminText` 不再发 QQ，改为把通知排进 `data/mail-outbox.json`（最多 50 条）；新增 `incidentPilot.qqNotify` 开关（默认关，关着时"可发"算真、事件标记已通知）；更新通知不再依赖 OneBot 连接；好友申请/候选的文案改成"审批入口在控制台"（邮件里回复不会被执行） |
+| `patch-budget-mail` | 每日花费超限不再私聊管理员，改写 `data/budget-alert.json`；顺带删掉因此不再使用的 `readOwnerUin` 引入 |
+| `patch-incident-ui-text` | 控制台「异常」页三处文案：「告警管理员 QQ」→「告警收件人（邮件）」、「OneBot 恢复后发送」→「排队等邮件（每 10 分钟一发）」、警告级勾选说明 |
+
+### 配套（脚本侧，不是补丁）
+
+`scripts/usage-daily.mjs`（服务器上同一份）负责把队列发出去：每次跑读 `mail-outbox.json`
+逐条发信、发完清掉；失败留队重试、连续 6 次放弃并记错误。另外：
+
+- 立刻发的等级从"只有 `severe`"改成 `critical,severe,error`，等级标签按真实等级显示
+- `incidentPilot.notifyWarnings` 现在决定要不要把警告级也单发一封（以前只管 QQ 通道）
+- 投递失败会把 `lastFailureAt/lastFailureError` 写进 `data/incident-notify.json`，
+  下一天的日报里带一行 ⚠
+
+### 验证
+
+1. `patch -p1 --dry-run -R < 每个补丁` 反向 dry-run 通过（`apply-patches.sh` 会用这个判"已生效"）。
+2. 往 `data/mail-outbox.json` 放一条测试通知 → 跑 `usage-daily.mjs` → 邮件收到、队列清空；
+   同时确认 QQ 私聊里没有该消息（`messages` 表按关键词查询应为 0 条）。
+3. 临时写 `data/budget-alert.json` + 一份模拟的 `lastFailureAt` → `--dry` 能看到
+   "四、需要你注意"两行。
+
+---
+
+## patch-moment-topic-guard-2026-10-16.diff
+
+### 为什么需要它
+
+某天的「每日动态」（自动发到 QQ 空间的说说）把群里聊到的**时政 + 社会争议 + 擦边内容**总结进去了，
+管理员只能手动删。这类内容一旦发出去就是公开可见（哪怕设了好友可见，也是给所有好友看）。
+
+### 改了什么（4 个文件）
+
+| 文件 | 改动 |
+|---|---|
+| `src/llm/moment-prompt.js` | 新增【发布禁区（硬性）】一节（时政 / 社会争议 / 色情擦边 / 他人私事，含配图禁忌）；删掉"让人设决定你站什么立场"这句诱因；素材改成"群里的小事 **或自己编一段 MyGO 成员互动**" |
+| `src/features/daily-moments.js` | 新增 `FORBIDDEN_PUBLIC_TOPIC` / `forbiddenTopicHit()`，在 `sanitizeDecision` 里命中即**强制 skip**（理由写进记录）；`#publishMoment` 拒绝"所有人可见(1)"的可见范围、并把可见范围打进日志 |
+| `src/llm/qzone-interaction-prompt.js` | 空间互动的【安全边界】补同一组禁区：敏感动态一律 skip，不点赞不评论不玩梗 |
+| `src/features/group-digest.js` | 群日报提示词同样加禁区（群里发的那条也不能带这三类），并说明"这类内容占多数就只写无害日常" |
+
+### 验证
+
+1. `apply-patches.sh` 反向 dry-run 通过（判"已生效"）。
+2. 用**已部署**文件里的正则跑样例：政治/时政/战争/社会争议/网暴/性别对立/色情/擦边 全部命中；
+   吃的/乐队小剧场/游戏/动漫/上课 全部不命中。
+3. 可见范围：`dailyMoments.visibility = 4`（好友可见），发布参数 `ugc_right: 4`；改成 1 会被拦。
 
 ---
 
