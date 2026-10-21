@@ -1,0 +1,64 @@
+diff --git a/src/core/orchestrator.js b/src/core/orchestrator.js
+index 02d643d..4833776 100644
+--- a/src/core/orchestrator.js
++++ b/src/core/orchestrator.js
+@@ -133,6 +133,22 @@ import { ttsConfigured } from '../llm/tts-openai.js';
+
+ const log = createLogger('orchestrator');
+
++// 概率/生命周期触发没有“定向回复”语义，但不能把已经写好的正常发言静默丢掉。
++// 仅当这一轮一条消息都没发、也没调用其它工具，且文本明显不是内部备注时提醒一次；
++// 不替模型转发正文，避免把“这轮不接”之类的判断草稿发进群。
++const TEXT_NUDGE_PROMPT = '[系统] 你刚才把要说的话写成了普通文本，没有调用 send_message——它不会到达 QQ 群。'
++  + '如果那是你想对群里说的，就调用 send_message 发出去；如果确实不打算发言，直接结束，不要解释这条提示。';
++const NOTE_ONLY_TEXT = /^(（|\(|【|\[|「|《)|安静|冷场|不发言|不吭声|不接话|不接了|新消息|草稿|本次唤醒|本轮|这轮|判断[:：]|思考[:：]|系统[:：]|没人说话|没人接|没人理|按作息|静着|没什么(能|可)|没得接|没有可接/i;
++
++function looksLikeSpeechText(text) {
++  const value = String(text || '').trim();
++  if (value.length < 2 || value.length > 400) return false;
++  if (/^[？?。，,、…！!~;；\s]+$/.test(value)) return false;
++  if (NOTE_ONLY_TEXT.test(value)) return false;
++  if (/^(no new messages|nothing to (say|reply)|staying quiet|done|ok|success|completed|finished)\b/i.test(value)) return false;
++  return true;
++}
++
+ function handoffParticipantIds(triggerEntries) {
+   return [...new Set((triggerEntries || [])
+     .filter((m) => !m?.self && m?.senderId !== null && m?.senderId !== undefined)
+@@ -2259,6 +2275,7 @@ export class Orchestrator {
+     const maxRounds = runLimits.maxRounds;
+     let finish = false;
+     let completed = false;
++    let textNudgeMessage = null;
+     let webSearchCount = 0;
+     session.activity = '';
+     session.webSearchCount = 0;
+@@ -2419,6 +2436,19 @@ export class Orchestrator {
+         this.emit('session-update', session.id);
+       }
+       if (!toolCalls.length) {
++        if (!textNudgeMessage
++          && !session.sent.length
++          && (session.triggerKind === 'probability' || session.triggerKind === 'lifecycle')
++          && round + 1 < maxRounds
++          && looksLikeSpeechText(rawContent)) {
++          textNudgeMessage = { role: 'user', content: TEXT_NUDGE_PROMPT };
++          messages.push(textNudgeMessage);
++          session.textNudged = true;
++          this.sessions.update(session.id);
++          this.emit('session-update', session.id);
++          log.warn(`[${chatKey}] 非定向轮次只写了文本没调工具，已提醒一次（${String(rawContent).trim().length} 字）`);
++          continue;
++        }
+         // 没有工具调用 = 模型结束思考（文本不会发给 QQ）
+         completed = true;
+         break;
+@@ -2554,7 +2583,7 @@ export class Orchestrator {
+         : '本轮模型轮数用尽，已安全结束';
+     }
+     const providerTranscriptDelta = conversationCfg.mode === 'lifecycle'
+-      ? structuredClone(messages.slice(transcriptStart))
++      ? structuredClone(messages.slice(transcriptStart).filter((message) => message !== textNudgeMessage))
+       : [];
+     // 普通 assistant 文本不会发到 QQ，它只是本次运行的内部输出。下一生命周期轮次
+     // 不应把它伪装成机器人曾经说过的话；移除后仍能完整命中上一请求的输入边界。

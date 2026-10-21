@@ -1,0 +1,65 @@
+--- a/src/core/orchestrator.js
++++ b/src/core/orchestrator.js
+@@ -119,7 +119,7 @@
+ import { buildSystemPrompt, buildUserPrompt, resolveContextTier } from '../llm/prompt.js';
+ import { chatCompletion, chatCompletionWithRetry, addUsage, emptyUsage, isRetryableError } from '../llm/llm.js';
+ import { buildToolDefs, toOpenAiTools, executeTool, platformToolAllowed } from '../tools/tools.js';
+-import { normalizeMid } from '../tools/tools-core.js';
++import { normalizeMid, downloadImageAsDataUrl } from '../tools/tools-core.js';
+ import { visionEnabled } from '../llm/vision-scan.js';
+ import { currentProviders } from './providers.js';
+ import { buildSlangContextForChat } from '../console/asset-observer.js';
+@@ -651,6 +651,31 @@
+    *
+    * @returns {{shouldRespond:boolean, tier:number, count:number, reason:string}}
+    */
++  /**
++   * 触发消息里带的图片：下载成 data URL，随请求一起发给模型。
++   *
++   * 2026-10-17：实测她经常"看着 [图片] 占位符"就接话（72 小时 398 次运行、看图工具只调了 86 次），
++   * 于是被问图上有什么时显得很瞎。这里改成自动附图，不依赖她主动调 get_message_images。
++   * 上限 3 张、单张走 tools-core 同一套下载/压缩逻辑；任何一张失败都不影响整轮。
++   */
++  async #collectTriggerImages(triggerEntries, signal) {
++    const out = [];
++    for (const entry of (triggerEntries || []).slice(-8)) {
++      let media = entry?.media;
++      if (typeof media === 'string') { try { media = JSON.parse(media); } catch { media = null; } }
++      if (!Array.isArray(media)) continue;
++      for (const item of media.filter((x) => x && x.kind === 'image' && x.url)) {
++        if (out.length >= 3) return out;
++        try {
++          out.push(await downloadImageAsDataUrl(item.url, signal));
++        } catch (error) {
++          log.warn('[vision] 触发图下载失败：' + String(error?.message ?? error).slice(0, 120));
++        }
++      }
++    }
++    return out;
++  }
++
+   #predictTier(chatKey, { roll } = {}) {
+     const cfg = getConfig();
+     const conversation = conversationConfigForChat(chatKey);
+@@ -1877,6 +1902,21 @@
+       ...structuredClone(priorProviderMessages),
+       currentUserMessage
+     ];
++
++    // 触发消息自带的图：自动附上（见 #collectTriggerImages 的注释）
++    if (visionEnabled(getConfig())) {
++      const triggerImages = await this.#collectTriggerImages(triggerEntries, signal);
++      if (triggerImages.length) {
++        messages.push({
++          role: 'user',
++          content: [
++            { type: 'text', text: '[系统：以上触发消息里带了图片，原图如下，先看清楚再回应]' },
++            ...triggerImages.map((url) => ({ type: 'image_url', image_url: { url } }))
++          ]
++        });
++        log.info(`[vision] 触发图 ${triggerImages.length} 张已附图（${chatKey}）`);
++      }
++    }
+     const transcriptStart = 1 + priorProviderMessages.length;
+     session.injectedMessages = modelMessagesForAudit(priorProviderMessages);
+     session.injectedMessageChars = JSON.stringify(priorProviderMessages).length;

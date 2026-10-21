@@ -1,0 +1,38 @@
+name: 改进建议
+description: 对文档结构、脚本、运维流程等提出改进意见
+title: "[建议] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        欢迎提建议。请说明使用场景与理由，便于判断是否适用。
+        本仓库是个人记录，是否采纳由仓库所有者决定；与主题无关的推广内容会被关闭。
+  - type: textarea
+    id: idea
+    attributes:
+      label: 你的建议
+      description: 想改什么、希望改成什么样
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: 理由与依据
+      description: 为什么这样更好？有实际踩坑或资料支撑更有说服力
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: 影响范围（可选）
+      description: 会涉及哪些文件或流程
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已确认内容不含真实密码、令牌、服务器地址、账号或群号等敏感信息
+          required: true
+        - label: 我已阅读 CODE_OF_CONDUCT.md，会就事论事、理性表达
+          required: true

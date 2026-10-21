@@ -1,0 +1,93 @@
+--- a/src/llm/prompt.js
++++ b/src/llm/prompt.js
+@@ -10,6 +10,9 @@
+ // 行为规则全部移植自 qq-bridge 的二代仿真 preset（qq-chat-v2），去掉了
+ // 沉睡/唤醒/等待机制（由编排器的"已读/未读驱动"取代）。
+ 
++import fs from 'node:fs';
++import path from 'node:path';
++import { DATA_DIR } from '../core/config-legacy.js';
+ import { asrAvailable, getConfig, imageGenAvailable } from '../core/config.js';
+ import { platformGateAllowed, platformQuotaLimit } from '../core/platform-gates.js';
+ import { visionEnabled } from './vision-scan.js';
+@@ -29,6 +32,29 @@
+ import { displayNameOf } from '../core/display-name.js';
+ import { buildStickerContext, buildStickerStrategyHint } from '../onebot/stickers.js';
+ 
++// 功能性规则模块（识图/语音）放在 data/rules/*.md：只在对应场景注入，平时不占提示词。
++// 按 mtime 缓存，改文件后下一次运行即生效，不需要重启。
++const ruleModuleCache = new Map();
++const ruleModuleWarned = new Set();
++export function loadRuleModule(name) {
++  const file = path.join(DATA_DIR, 'rules', `${name}.md`);
++  try {
++    const mtimeMs = fs.statSync(file).mtimeMs;
++    const hit = ruleModuleCache.get(file);
++    if (hit && hit.mtimeMs === mtimeMs) return hit.text;
++    const text = fs.readFileSync(file, 'utf8').trim();
++    ruleModuleCache.set(file, { mtimeMs, text });
++    return text;
++  } catch (error) {
++    // 文件被删/权限不对时只提醒一次（journalctl 可见），不让整次运行失败。
++    if (!ruleModuleWarned.has(file)) {
++      ruleModuleWarned.add(file);
++      console.warn(`[rules] 规则模块读取失败：${file}（${error?.code || error?.message}）`);
++    }
++    return '';
++  }
++}
++
+ // ── 系统提示 ─────────────────────────────────────────────────────────────
+ 
+ function securityRules(grounded = false) {
+--- a/src/core/orchestrator.js
++++ b/src/core/orchestrator.js
+@@ -116,7 +116,7 @@
+ import { budgetStatus } from './budget.js';
+ import { buildReminderNote, reminderNoteCost } from './reminders.js';
+ import { ZONE_OFFSET_MS, minuteOfDayInZone, randInt, createEventBus, todayKey } from './util.js';
+-import { buildSystemPrompt, buildUserPrompt, resolveContextTier } from '../llm/prompt.js';
++import { buildSystemPrompt, buildUserPrompt, loadRuleModule, resolveContextTier } from '../llm/prompt.js';
+ import { chatCompletion, chatCompletionWithRetry, addUsage, emptyUsage, isRetryableError } from '../llm/llm.js';
+ import { buildToolDefs, toOpenAiTools, executeTool, platformToolAllowed } from '../tools/tools.js';
+ import { normalizeMid, downloadImageAsDataUrl } from '../tools/tools-core.js';
+@@ -1752,6 +1752,20 @@
+       return true;
+     });
+     const openAiTools = toOpenAiTools(toolDefs);
++    // 规则模块判定标准（见 patches/README）：
++    //   识图：视觉可用 + 本轮触发消息里有 image，或触发文本出现 [图片]/[表情包]
++    //   语音：ASR 可用 + 本轮触发消息里有 audio，或触发文本出现 [语音]/音频文件占位
++    const triggerMedia = [];
++    for (const entry of (triggerEntries || []).slice(-8)) {
++      let media = entry?.media;
++      if (typeof media === 'string') { try { media = JSON.parse(media); } catch { media = null; } }
++      if (Array.isArray(media)) triggerMedia.push(...media);
++    }
++    const triggerText = (triggerEntries || []).slice(-8).map((e) => String(e?.text ?? '')).join('\n');
++    const needImageRules = canSeeImages
++      && (triggerMedia.some((m) => m?.kind === 'image') || /\[图片\]|\[表情包\]/.test(triggerText));
++    const needVoiceRules = asrEnabled
++      && (triggerMedia.some((m) => m?.kind === 'audio') || /\[语音\]|\.(m4a|mp3|wav|amr|aac|ogg)\b/i.test(triggerText));
+     const systemPrompt = buildSystemPrompt({
+       // 与【此刻状态】用同一个名字（群名片优先），否则同一次请求里会出现两个"你在群里的名字"
+       selfNickname,
+@@ -1917,6 +1931,18 @@
+         log.info(`[vision] 触发图 ${triggerImages.length} 张已附图（${chatKey}）`);
+       }
+     }
++    // 功能性规则只在对应场景出现。**必须放在用户消息里**：系统提示参与 promptPrefixHash，
++    // 一变就会关掉生命周期线程（prompt-prefix-changed），聊天连续性会被打断。
++    const extraRules = [];
++    if (needImageRules) extraRules.push(loadRuleModule('image'));
++    if (needVoiceRules) extraRules.push(loadRuleModule('voice'));
++    const extraRuleText = extraRules.filter(Boolean).join('\n');
++    if (extraRuleText) {
++      messages.push({
++        role: 'user',
++        content: [{ type: 'text', text: '[系统：本轮相关的操作规则]\n' + extraRuleText }]
++      });
++    }
+     const transcriptStart = 1 + priorProviderMessages.length;
+     session.injectedMessages = modelMessagesForAudit(priorProviderMessages);
+     session.injectedMessageChars = JSON.stringify(priorProviderMessages).length;

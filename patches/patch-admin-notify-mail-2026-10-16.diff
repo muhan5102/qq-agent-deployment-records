@@ -1,0 +1,117 @@
+--- a/src/console/app.js
++++ b/src/console/app.js
+@@ -727,41 +727,66 @@ export function createApp({
+       { name: '关系台账', run: () => identityPilot?.pruneRelationshipHistory?.() },
+       { name: '异常台账', run: () => incidentPilot?.pruneResolvedIncidents() },
+       { name: '运行台账', run: () => store.pruneRuns() },
+       { name: '会话留档', run: () => sessions.pruneSessions() }
+     ];
+   }
++  const MAIL_OUTBOX_FILE = path.join(DATA_DIR, 'mail-outbox.json');
++  const MAIL_OUTBOX_MAX = 50;
++  /**
++   * 管理员通知改成"写邮件待发队列"：程序自己不连 SMTP，由 usage-daily.mjs（每 10 分钟一跑）
++   * 读出这个文件发信。这样通知不再落进"和角色的私聊"里 —— 以前它既出戏，又会被角色自己的
++   * 上下文读到、甚至接茬（2026-10-16 用户要求：这些通知也走邮件）。
++   */
++  function enqueueAdminMail({ text, subject = '' }) {
++    let box = { items: [] };
++    try {
++      const parsed = JSON.parse(fs.readFileSync(MAIL_OUTBOX_FILE, 'utf8'));
++      if (parsed && Array.isArray(parsed.items)) box = parsed;
++    } catch { /* 首次或文件坏了：重建 */ }
++    const firstLine = String(text || '').split('\n')[0].replace(/[【】]/g, '').trim();
++    const items = box.items.slice();
++    items.push({
++      id: `mi_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
++      at: Date.now(),
++      subject: String(subject || firstLine || 'QQ Agent 通知').slice(0, 60),
++      text: String(text || ''),
++      failures: 0,
++      lastError: ''
++    });
++    // 只留最近 50 条：真积压说明邮件通道断了，靠日报里那句"上次转发失败"人工处理
++    fs.writeFileSync(
++      MAIL_OUTBOX_FILE,
++      JSON.stringify({ items: items.slice(-MAIL_OUTBOX_MAX) }),
++      { encoding: 'utf8', mode: 0o600 }
++    );
++    log(`[mail-outbox] 已排队 1 封：${String(subject || firstLine).slice(0, 40)}`);
++  }
++
++  /**
++   * 管理员通知的统一出口。以前是私聊发 QQ（还会 appendSelf 写进聊天记录），现在只排邮件。
++   * 保留函数名与签名，调用方（更新通知 / 好友申请 / 好友候选 / 审批回执 / 黑话审批）不用改。
++   */
+   async function sendIdentityAdminText(ownerUin, text, signal) {
+     const userId = String(ownerUin || '').trim();
+     if (!/^\d{5,15}$/.test(userId)) throw new Error('管理员 QQ 配置无效');
+-    const data = await onebot.sendText('private', userId, text, { signal });
+-    store.appendSelf(`private:${userId}`, {
+-      mid: data?.message_id ?? null,
+-      ts: Date.now(),
+-      text
+-    });
+-    emit('chat-update', `private:${userId}`);
+-    return data;
++    signal?.throwIfAborted();
++    enqueueAdminMail({ text });
++    return { mailed: true };
+   }
+   autoUpdate = new AutoUpdateManager({
+     appDir: autoUpdateOptions.appDir || ROOT,
+     dataDir: DATA_DIR,
+     config: getConfig,
+     updateConfig,
+     emit,
+     log,
+-    notifyAvailable: () => onebot.connected === true,
+-    // 与异常告警同口径：连协议端都没连上 = **确定没发出去**（带 beforeWrite，保留 pending 等重连后重发）；
+-    // 已经在发送中失败的（超时/业务拒绝）属于"结果未知"，只记 deliveryUnknown、不自动重发
+-    // —— 否则 pending 会一直留着，30 秒一次的定时器把同一条失败通知反复发给管理员。
+-    notify: async (text, ownerUin) => {
+-      if (!onebot.connected) {
+-        throw Object.assign(new Error('OneBot 未连接，更新失败通知等待发送'), { beforeWrite: true });
+-      }
+-      return sendIdentityAdminText(ownerUin, text);
+-    },
++    // 更新通知也走邮件队列：不再依赖 OneBot 连接（邮件由 usage-daily.mjs 发），
++    // 排队就算"已交付"，不会因为协议端掉线把同一条通知反复重发。
++    notifyAvailable: () => true,
++    notify: async (text, ownerUin) => sendIdentityAdminText(ownerUin, text),
+     ...(autoUpdateOptions.runSystemctl
+       ? { runSystemctl: autoUpdateOptions.runSystemctl }
+       : {})
+   });
+   async function syncIdentityPilot({ reindex = false, reconfigure = false } = {}) {
+     if (!identityPilotEnabled()) {
+@@ -792,13 +817,13 @@ export function createApp({
+             '【实验功能 · 主动好友候选】',
+             `对象：${proposal.primaryName || '未命名'}（${proposal.userId}）`,
+             `来源：${proposal.sourceChatKey}`,
+             `原因：${reasonLabels[proposal.reasonCode] || proposal.reasonCode}；${proposal.reason}`,
+             `编号：${proposal.id}${verification}`,
+             '',
+-            `回复“同意好友 ${proposal.id}”或“拒绝好友 ${proposal.id}”，也可以在控制台“设置 → 实验功能”审批。`,
++            `审批入口：控制台 →“设置 → 实验功能”（批准/拒绝 ${proposal.id}）。本通知只发邮件，不在 QQ 里回复。`,
+             getConfig().identityPilot?.friendProposal?.activeDispatchEnabled === true
+               ? '说明：批准后会通过 SnowLuma 实验协议发送申请；仅明确成功才标记已提交，结果未知时不会自动重试。'
+               : '说明：主动发送实验开关未开启；批准后会进入待手动执行状态，不会伪报已发送。'
+           ].join('\n'),
+           signal
+         );
+@@ -810,13 +835,13 @@ export function createApp({
+           [
+             '【实验功能 · 收到好友请求】',
+             `申请人：${request.primaryName || '未命名'}（${request.userId}）`,
+             `验证消息：${request.comment || '（无）'}`,
+             `编号：${request.id}`,
+             '',
+-            `回复“同意好友申请 ${request.id}”或“拒绝好友申请 ${request.id}”，也可以在控制台“设置 → 实验功能”审批。`,
++            `审批入口：控制台 →“设置 → 实验功能”（同意/拒绝 ${request.id}）。本通知只发邮件，不在 QQ 里回复。`,
+             '同意后会调用 OneBot 接受请求，并自动加入私聊白名单；结果未知时不会自动重试。'
+           ].join('\n'),
+           signal
+         );
+       },
+       allowPrivateUser: async (userId) => {

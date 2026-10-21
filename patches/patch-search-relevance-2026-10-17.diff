@@ -1,0 +1,146 @@
+--- a/src/llm/web-search.js
++++ b/src/llm/web-search.js
+@@ -49,6 +49,24 @@
+  * 任一源失败不影响整体；全部失败才抛错。
+  * # ponytail: 简单并发+URL去重；排名融合（RRF）等结果多了再加。
+  */
++/** 查询切词：去掉时间/疑问填充词，留下 ≥2 字的实词。 */
++function queryTokens(query) {
++  const STOP = new Set(['最新','新闻','今天','现在','最近','怎么样','什么','如何','多少','是谁','是什么','梗']);
++  return String(query || '')
++    .split(/[\s,，。；;、\/]+/)
++    .map((t) => t.replace(/^(什么是|是什么|是谁|有哪些|怎么|为什么)/, '').trim())
++    .filter((t) => t.length >= 2 && !STOP.has(t));
++}
++
++/** 命中分 = 命中词的总字数（"上海 台风"里只有"上海"的旅游页 2 分，两个都中的 4 分）。 */
++function relevanceScore(item, tokens) {
++  if (!tokens.length) return 1;
++  const hay = [item?.title || '', item?.snippet || '', item?.url || ''].join(' ').toLowerCase();
++  let score = 0;
++  for (const t of tokens) if (hay.includes(t.toLowerCase())) score += t.length;
++  return score;
++}
++
+ export async function aggregateSearch(query) {
+   const cfg = getConfig().webSearch?.aggregate ?? {};
+   const sources = (Array.isArray(cfg.sources) && cfg.sources.length ? cfg.sources : ['doubao', 'bing'])
+@@ -76,14 +94,77 @@
+       results.push({ ...item, source });
+     }
+   }
+-  return { query, results, sources: ok.map((o) => o.source), failed: sources.filter((s) => !ok.some((o) => o.source === s)) };
++  // 相关性过滤：两家引擎都会混进"字面相关、其实答非所问"的条目（字典页/旅游攻略/酒店）。
++  // 按命中词的字数打分：0 分丢弃，其余按分数从高到低排（同分保持来源顺序）；
++  // 过滤后少于 2 条就退回未过滤的结果，避免整页被清空。
++  const tokens = queryTokens(query);
++  const scored = results
++    .map((item) => ({ item, score: relevanceScore(item, tokens) }))
++    .filter((x) => x.score > 0)
++    .sort((a, b) => b.score - a.score);
++  const finalResults = scored.length >= 2 ? scored.map((x) => x.item) : results;
++  return {
++    query,
++    results: finalResults,
++    sources: ok.map((o) => o.source),
++    failed: sources.filter((s) => !ok.some((o) => o.source === s)),
++    filteredOut: results.length - finalResults.length
++  };
+ }
+ 
+ /** Bing 搜索（解析 b_algo 结果块）。searchUrl 可在配置中替换（测试/换引擎）。 */
++/**
++ * Bing 搜索：优先走 `&format=rss`（RSS/XML），拿不到再回退 HTML 解析（bingSearchHtml）。
++ *
++ * 2026-10-17 改：cn.bing.com 的 HTML 结果页对云服务器 IP 经常回验证页，`b_algo` 一个都解析不出来
++ * （日志里表现为"没有可解析的结果"）。RSS 是给阅读器/机器消费的，实测同一批查询能稳定拿到条目。
++ */
+ export async function bingSearch(query) {
+   const cfg = getConfig().webSearch ?? {};
+   const searchUrl = String(cfg.searchUrl || 'https://cn.bing.com/search');
+   const maxResults = Math.max(1, Math.min(10, Number(cfg.maxResults) || 6));
++  try {
++    const rssUrl = new URL(searchUrl);
++    rssUrl.searchParams.set('q', query);
++    rssUrl.searchParams.set('format', 'rss');
++    const rssRes = await fetch(rssUrl, {
++      headers: {
++        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
++        'accept-language': 'zh-CN,zh;q=0.9'
++      },
++      signal: AbortSignal.timeout(15000)
++    });
++    if (rssRes.ok) {
++      const xml = await readTextBounded(rssRes, BING_HTML_MAX_BYTES);
++      const rssResults = parseBingRss(xml).slice(0, maxResults);
++      if (rssResults.length) return { query, results: rssResults };
++    }
++  } catch { /* RSS 失败就落到 HTML 解析 */ }
++  return bingSearchHtml(query);
++}
++
++/** 解析 Bing 的 RSS 输出（<item><title>/<link>/<description>）。 */
++function parseBingRss(xml) {
++  const out = [];
++  const items = String(xml || '').split('<item>').slice(1);
++  for (const block of items) {
++    const pick = (tag) => {
++      const m = block.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`, "i"));
++      if (!m) return '';
++      return decodeHtml(m[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1'));
++    };
++    const title = pick('title').trim();
++    const url = pick('link').trim();
++    const snippet = pick('description').replace(/<[^>]+>/g, '').trim();
++    if (!url) continue;
++    out.push({ title: title || '（无标题）', url, snippet });
++  }
++  return out;
++}
++async function bingSearchHtml(query) {
++  const cfg = getConfig().webSearch ?? {};
++  const searchUrl = String(cfg.searchUrl || 'https://cn.bing.com/search');
++  const maxResults = Math.max(1, Math.min(10, Number(cfg.maxResults) || 6));
+   const url = new URL(searchUrl);
+   url.searchParams.set('q', query);
+   const res = await fetch(url, {
+@@ -116,19 +197,32 @@
+ }
+ 
+ /** 给工具用的统一入口：搜索 + 紧凑序列化。 */
++/**
++ * 查询归一化：实测 Bing 会把"什么是地雷系"拆成"什么"（返回一堆字典页），
++ * 而"地雷系"、"地雷系 是什么意思"都正常。所以只剥掉开头/结尾这几类包装词，
++ * 其余原样保留——不做同义词改写，避免越改越偏。
++ */
++export function normalizeQuery(raw) {
++  let q = String(raw || '').replace(/\s+/g, ' ').trim();
++  q = q.replace(/^(帮我|请|麻烦)?(查一下|搜一下|搜索一下)?\s*(什么是|是什么|是谁|有哪些|怎么样)\s*/u, '');
++  q = q.replace(/\s*(是什么|是谁|怎么样|有哪些)\s*$/u, '');
++  return q.trim() || String(raw || '').trim();
++}
++
+ export async function webSearch(query) {
+   assertTimeAllowed();
+   const clean = sanitizeQuery(query);
+   if (!clean) throw new Error('查询词为空');
++  const usedQuery = normalizeQuery(clean);
+   const cfg = getConfig().webSearch ?? {};
+   const provider = String(cfg.provider || 'bing').toLowerCase();
+-  if (provider === 'aggregate') return aggregateSearch(clean);
+-  if (provider === 'deepseek') return deepSeekSearch(clean);
+-  if (provider === 'zhipu') return zhipuSearch(clean);
+-  if (provider === 'bocha') return bochaSearch(clean);
+-  if (provider === 'baidu') return baiduSearch(clean);
+-  if (provider === 'metaso') return metasoSearch(clean);
+-  if (provider === 'doubao') return doubaoSearch(clean);
++  if (provider === 'aggregate') return aggregateSearch(usedQuery);
++  if (provider === 'deepseek') return deepSeekSearch(usedQuery);
++  if (provider === 'zhipu') return zhipuSearch(usedQuery);
++  if (provider === 'bocha') return bochaSearch(usedQuery);
++  if (provider === 'baidu') return baiduSearch(usedQuery);
++  if (provider === 'metaso') return metasoSearch(usedQuery);
++  if (provider === 'doubao') return doubaoSearch(usedQuery);
+   // 自定义：'custom'（旧单槽位）或 'custom:<id>'（设置页添加的多个之一）
+   if (provider === 'custom' || provider.startsWith('custom:')) {
+     return customSearch(clean, provider);
