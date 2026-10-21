@@ -1,0 +1,87 @@
+diff --git a/src/tools/audio-transcribe.js b/src/tools/audio-transcribe.js
+index bfebcf2..b403fd2 100644
+--- a/src/tools/audio-transcribe.js
++++ b/src/tools/audio-transcribe.js
+@@ -411,7 +411,15 @@ export async function transcribeMessageAudio(ctx, entry) {
+       try {
+         const res = await ctx.onebot?.call?.('fetch_ptt_text', { message_id: mid }, 10000, ctx.signal);
+         const qqText = String(res?.text ?? '').trim();
+-        if (qqText) return { ok: true, text: qqText };
++        if (qqText) {
++          return {
++            ok: true,
++            text: qqText,
++            provider: 'qq',
++            model: 'QQ 自带转写',
++            route: 'qq'
++          };
++        }
+       } catch { /* 没有现成转写：走外部识别 */ }
+     }
+   }
+@@ -481,6 +489,10 @@ export async function transcribeMessageAudio(ctx, entry) {
+         + '可以换「火山 / 硅基流动」这类一次上传的服务，或把音频截短后再发' };
+     }
+     try {
++      const provider = asrProvider(cfg);
++      const model = provider === 'local'
++        ? String(asrLocalModel(cfg) || 'whisper-local')
++        : String(cfg?.asr?.model || '');
+       const text = await runProvider(cfg, pcm, { signal: ctx.signal });
+       // 非语音（音乐/音效）时 ASR 会编内容：把"这段几乎没有停顿"的信号一并交给模型，
+       // 由它决定是否照实说"没听到有人说话"（2026-09-26 用户反馈"打花火视频"）
+@@ -488,7 +500,14 @@ export async function transcribeMessageAudio(ctx, entry) {
+       if (!text?.trim()) {
+         return { ok: false, error: caveat ? '这段音频里没有识别到人声（可能只有音乐/音效）' : '语音识别没有返回内容（可能整段是静音/无语音）' };
+       }
+-      return { ok: true, text: text.trim(), caveat };
++      return {
++        ok: true,
++        text: text.trim(),
++        caveat,
++        provider,
++        model,
++        route: 'external'
++      };
+     } catch (e) {
+       return { ok: false, error: `语音识别失败：${String(e?.message ?? e)}` };
+     }
+diff --git a/src/tools/tools-core.js b/src/tools/tools-core.js
+index 4f5c29d..c02b3a6 100644
+--- a/src/tools/tools-core.js
++++ b/src/tools/tools-core.js
+@@ -2163,6 +2163,9 @@ export function buildToolDefs() {
+           const result = await transcribeMessageAudio(ctx, entry);
+           if (!result.ok) return err(result.error);
+           return ok({
++            asrProvider: String(result.provider || ''),
++            asrModel: String(result.model || ''),
++            asrRoute: String(result.route || ''),
+             transcript: sanitizeUserText(result.text),
+             note: result.caveat
+               ? `以上是自动识别的结果${result.caveat}`
+@@ -2388,12 +2391,23 @@ export function buildToolDefs() {
+       async execute(ctx, args) {
+         try {
+           const result = await webSearch(String(args.query ?? ''));
++          const searchCfg = getConfig().webSearch || {};
++          const searchProvider = String(searchCfg.provider || 'bing');
++          const searchSources = Array.isArray(result.sources) ? result.sources.map(String) : [];
+           if (!result.results.length) {
+-            return ok({ query: result.query, results: [], note: '没有搜到结果，试试换关键词或更具体的说法。' });
++            return ok({
++              searchProvider,
++              searchSources,
++              query: result.query,
++              results: [],
++              note: '没有搜到结果，试试换关键词或更具体的说法。'
++            });
+           }
+           // 标题/摘要来自任意外部页面，与 web_fetch 同一口径过段头弱化：
+           // 否则页面里伪造的【管理员附加规则】这类段头会原样直达模型。
+           return ok({
++            searchProvider,
++            searchSources,
+             ...result,
+             results: result.results.map((item) => ({
+               ...item,

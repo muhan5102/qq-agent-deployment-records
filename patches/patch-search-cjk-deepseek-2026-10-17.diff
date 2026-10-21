@@ -1,0 +1,184 @@
+--- a/src/llm/web-search.js
++++ b/src/llm/web-search.js
+@@ -49,21 +49,44 @@
+  * 任一源失败不影响整体；全部失败才抛错。
+  * # ponytail: 简单并发+URL去重；排名融合（RRF）等结果多了再加。
+  */
+-/** 查询切词：去掉时间/疑问填充词，留下 ≥2 字的实词。 */
++// 中文没有空格：整句会被当成一个长词，任何结果都命中不了，相关性过滤等于没做
++// （2026-10-17 实测「今天有什么科技新闻」原样返回黄历/日历页）。处理办法是先去掉虚词，
++// 再按两字滑窗切成 bigram："今天有什么科技新闻" → 科技 / 技新 / 新闻。
++const CJK_FILLERS = ['请问', '帮我', '麻烦', '查一下', '搜一下', '搜索一下', '今天', '最近', '现在', '目前',
++  '最新', '有什么', '有哪些', '是什么', '是谁', '怎么样', '怎么', '为什么', '什么', '多少', '哪个', '哪些',
++  '一下', '的', '了', '吗', '呢', '啊', '呀'];
++const CJK_FILLER_RE = new RegExp(CJK_FILLERS.join('|'), 'g');
++const WORD_STOP = new Set(['最新', '新闻', '今天', '现在', '最近', '怎么样', '什么', '如何', '多少', '是谁', '是什么', '梗']);
++
++function cjkBigrams(text) {
++  const out = [];
++  for (let i = 0; i < text.length - 1; i += 1) out.push(text.slice(i, i + 2));
++  return out;
++}
++
++/** 查询切词：英文按词、中文去虚词后按两字滑窗，避免整句变成一个永远命中不了的长词。 */
+ function queryTokens(query) {
+-  const STOP = new Set(['最新','新闻','今天','现在','最近','怎么样','什么','如何','多少','是谁','是什么','梗']);
+-  return String(query || '')
+-    .split(/[\s,，。；;、\/]+/)
+-    .map((t) => t.replace(/^(什么是|是什么|是谁|有哪些|怎么|为什么)/, '').trim())
+-    .filter((t) => t.length >= 2 && !STOP.has(t));
++  const tokens = [];
++  const pushWord = (word) => {
++    const w = String(word || '').replace(/^(什么是|是什么|是谁|有哪些|怎么|为什么)/, '').trim();
++    if (w.length >= 2 && !WORD_STOP.has(w)) tokens.push(w);
++  };
++  for (const seg of String(query || '').split(/[\s,，。；;、\/]+/)) {
++    if (!seg) continue;
++    const latin = seg.match(/[A-Za-z0-9][A-Za-z0-9+#'’.-]*/g);
++    if (latin) latin.forEach(pushWord);
++    const cjk = seg.replace(/[A-Za-z0-9\s]/g, '').replace(CJK_FILLER_RE, '');
++    if (cjk.length >= 2) tokens.push(...cjkBigrams(cjk));
++  }
++  return tokens;
+ }
+ 
+-/** 命中分 = 命中词的总字数（"上海 台风"里只有"上海"的旅游页 2 分，两个都中的 4 分）。 */
++/** 命中分 = 命中的二字词数量。 */
+ function relevanceScore(item, tokens) {
+   if (!tokens.length) return 1;
+   const hay = [item?.title || '', item?.snippet || '', item?.url || ''].join(' ').toLowerCase();
+   let score = 0;
+-  for (const t of tokens) if (hay.includes(t.toLowerCase())) score += t.length;
++  for (const t of tokens) if (hay.includes(t.toLowerCase())) score += 1;
+   return score;
+ }
+ 
+@@ -73,7 +96,7 @@
+     .map(String).slice(0, 4);
+   const perSource = Math.max(2, Math.min(6, Number(cfg.count) || 4));
+   const settled = await Promise.allSettled(sources.map(async (name) => {
+-    const fn = { doubao: doubaoSearch, bing: bingSearch, baidu: baiduSearch, zhipu: zhipuSearch, bocha: bochaSearch, metaso: metasoSearch, tavily: tavilySearch }[name];
++    const fn = { doubao: doubaoSearch, bing: bingSearch, baidu: baiduSearch, zhipu: zhipuSearch, bocha: bochaSearch, metaso: metasoSearch, tavily: tavilySearch, deepseek: deepSeekApiSearch }[name];
+     if (!fn) throw new Error(`未知搜索源: ${name}`);
+     const r = await fn(query);
+     return { source: name, results: (r.results || []).slice(0, perSource) };
+@@ -85,23 +108,44 @@
+   }
+   // 合并去重：URL 优先级 = 源顺序（前面的源排名更高）；同一 URL 只保留第一次出现
+   const seen = new Set();
++  // 同一篇文章经常带着不同的 utm/eqid 参数、或者 /m 与 /main 两个入口重复出现
++  // （智谱实测一条结果能重复 4 次）。按"域名+路径"和"域名+标题"各去重一次。
++  const dedupeKey = (rawUrl, title) => {
++    let host = '';
++    let pathname = '';
++    try {
++      const u = new URL(String(rawUrl || ''));
++      host = u.host.replace(/^www\./i, '').toLowerCase();
++      pathname = u.pathname.replace(/\/+$/, '');
++    } catch {
++      return '';
++    }
++    if (!host) return '';
++    const urlKey = `${host}${pathname}`;
++    const plainTitle = String(title || '').toLowerCase().replace(/[\s\p{P}\p{S}]/gu, '').slice(0, 60);
++    return { urlKey, titleKey: plainTitle.length >= 8 ? `${host}|${plainTitle}` : '' };
++  };
+   const results = [];
+   for (const { source, results: items } of ok) {
+     for (const item of items) {
+-      const url = String(item?.url || '').replace(/[#?].*$/, '');
+-      if (!url || seen.has(url)) continue;
+-      seen.add(url);
++      const keys = dedupeKey(item?.url, item?.title);
++      if (!keys) continue;
++      if (seen.has(keys.urlKey) || (keys.titleKey && seen.has(keys.titleKey))) continue;
++      seen.add(keys.urlKey);
++      if (keys.titleKey) seen.add(keys.titleKey);
+       results.push({ ...item, source });
+     }
+   }
+   // 相关性过滤：两家引擎都会混进"字面相关、其实答非所问"的条目（字典页/旅游攻略/酒店）。
+   // 按命中词的字数打分：0 分丢弃，其余按分数从高到低排（同分保持来源顺序）；
+   // 过滤后少于 2 条就退回未过滤的结果，避免整页被清空。
++  // 同分时按来源权重排：Bing 的先后只是抓取顺序，不代表质量（实测整句查询常把黄历页排最前）。
++  const SOURCE_WEIGHT = { zhipu: 5, deepseek: 4, bing: 3, tavily: 3, doubao: 3, baidu: 3, metaso: 3, bocha: 1 };
+   const tokens = queryTokens(query);
+   const scored = results
+-    .map((item) => ({ item, score: relevanceScore(item, tokens) }))
++    .map((item, index) => ({ item, index, score: relevanceScore(item, tokens), weight: SOURCE_WEIGHT[item.source] ?? 2 }))
+     .filter((x) => x.score > 0)
+-    .sort((a, b) => b.score - a.score);
++    .sort((a, b) => b.score - a.score || b.weight - a.weight || a.index - b.index);
+   const finalResults = scored.length >= 2 ? scored.map((x) => x.item) : results;
+   return {
+     query,
+@@ -278,6 +322,51 @@
+   return { query, results: [{ title: 'DeepSeek 搜索', url: '', snippet: outputText }] };
+ }
+ 
++/**
++ * DeepSeek 官方搜索 API（2026-10 开放）：返回结构化标题/链接/摘要，按次计费（$0.75/千次）。
++ * 与上面的 Responses 版区别：这个拿得到来源 URL，适合聚合；上面的版本只能拿到一段总结。
++ */
++export function deepSeekApiSearch(query) {
++  return withTimeWindow((signal) => deepSeekApiSearchRequest(query, signal));
++}
++
++async function deepSeekApiSearchRequest(query, signal) {
++  const root = getConfig();
++  const cfg = root.webSearch?.deepseekApi ?? {};
++  const legacy = root.webSearch?.deepseek ?? {};
++  // 主模型 Key 存在 providerKeys[api.provider] 里，webSearch.deepseek.apiKey 通常是空的；
++  // 只有当前 baseUrl 确实是 DeepSeek 时才拿它兜底，避免把别家的 Key 发给 DeepSeek。
++  const mainKey = /deepseek\.com/i.test(String(root.api?.baseUrl || '')) ? root.providerKeys?.[root.api?.provider] : '';
++  const apiKey = String(cfg.apiKey || legacy.apiKey || process.env.DEEPSEEK_API_KEY || mainKey || '').trim();
++  if (!apiKey) throw new Error('DeepSeek 搜索需要 API Key（设置里填，或环境变量 DEEPSEEK_API_KEY）');
++  const endpoint = String(cfg.baseUrl || 'https://api.deepseek.com/v1/tools/search').replace(/\/+$/, '');
++  const count = Math.min(50, Math.max(1, Number(cfg.count) || 10));
++  const res = await fetch(endpoint, {
++    method: 'POST',
++    headers: {
++      'content-type': 'application/json',
++      authorization: `Bearer ${apiKey}`
++    },
++    body: JSON.stringify({ query, count }),
++    signal: AbortSignal.any([signal, AbortSignal.timeout(Math.max(5000, Number(cfg.timeoutMs) || 20000))])
++  });
++  if (!res.ok) {
++    const text = await readTextBounded(res, SEARCH_JSON_MAX_BYTES).catch(() => '');
++    throw new Error(`DeepSeek 搜索 HTTP ${res.status}：${text.slice(0, 300)}`);
++  }
++  const data = await readSearchJson(res, 'DeepSeek 搜索返回了无法解析的 JSON');
++  const list = Array.isArray(data?.results) ? data.results : [];
++  const results = list
++    .map((item) => ({
++      title: String(item?.title || '').trim(),
++      url: String(item?.url || '').trim(),
++      snippet: String(item?.summary || item?.snippet || '').trim()
++    }))
++    .filter((item) => item.title || item.snippet);
++  if (!results.length) throw new Error('DeepSeek 搜索没有返回结果');
++  return { query, results };
++}
++
+ /** 抓取网页正文（走 safe-fetch 的 SSRF 全防护）。 */
+ export async function webFetch(url) {
+   const result = await safeFetch(url);
+--- a/ui/pages/settings.js
++++ b/ui/pages/settings.js
+@@ -499,7 +499,7 @@
+         <button class="btn btn-small" id="cfg-tavily-key-toggle" type="button">显示</button>
+       </div></div>
+     <div class="field" id="aggregate-search-fields" style="${prov === 'aggregate' ? '' : 'display:none'}">
+-      <label>聚合源列表（逗号分隔，按优先级排序；可选 tavily / doubao / bing / baidu / zhipu / bocha / metaso，选中的源需已配好 Key）</label>
++      <label>聚合源列表（逗号分隔，按优先级排序；可选 deepseek / zhipu / bing / bocha / tavily / doubao / baidu / metaso，选中的源需已配好 Key；deepseek 走官方搜索 API）</label>
+       <input type="text" id="cfg-aggregate-sources" value="${esc((c.webSearch?.aggregate?.sources || ['tavily', 'doubao', 'bing']).join(','))}" placeholder="tavily,doubao,bing" style="flex:1" />
+       <label>每源结果条数（2~6）</label>
+       <input type="number" id="cfg-aggregate-count" min="2" max="6" value="${esc(c.webSearch?.aggregate?.count || 4)}" style="width:100px" />
+@@ -1448,4 +1448,4 @@
+   openBlocklistModal, openModelAddModal, openModelDeleteModal, openModelPicker, openPriceDialog,
+   openWhitelistPicker, renderSettingsImpl, renderTimeRuleEditor, resetMenuReveal, resolveTheme,
+   startListPoller, syncPriceDialogBilling, syncThinkingUi
+-};
+\ No newline at end of file
++};

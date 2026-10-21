@@ -1,0 +1,94 @@
+--- a/src/memory/memory-global.js
++++ b/src/memory/memory-global.js
+@@ -99,10 +99,15 @@
+     const prev = this.getHandoff(chatKey) || {}; const now = Date.now();
+     const ttl = Math.min(10080, Math.max(5, Number(state?.ttlMinutes) || Number(getConfig().memory?.handoffTtlMinutes) || 1440));
+     const pick = (key, n, chars = 240) => Array.isArray(state?.[key]) ? list(state[key], n, chars) : list(prev[key], n, chars);
++
++    // 私聊里交接写得细一点（2026-10-16 用户要求：过程体验更好）：群聊保持原来的克制，
++    // 私聊把条数与字数放宽——约定、近况、情绪、还能接的话题都要留得下。
++    const rich = String(chatKey || '').startsWith('private:');
++    const cap = (n, chars, wideN, wideChars) => (rich ? [wideN, wideChars] : [n, chars]);
+     const handoff = {
+-      version: 1, topic: clean(state?.topic ?? prev.topic, 200), summary: clean(state?.summary ?? meta?.summary ?? prev.summary, 1200),
+-      hypotheses: pick('hypotheses', 6, 300), evidence: pick('evidence', 8, 300), facts: pick('facts', 8), decisions: pick('decisions', 6),
+-      rejectedDirections: pick('rejectedDirections', 6), openQuestions: pick('openQuestions', 6), nextStep: clean(state?.nextStep ?? prev.nextStep, 400),
++      version: 1, topic: clean(state?.topic ?? prev.topic, rich ? 300 : 200), summary: clean(state?.summary ?? meta?.summary ?? prev.summary, rich ? 2000 : 1200),
++      hypotheses: pick('hypotheses', ...cap(6, 300, 8, 400)), evidence: pick('evidence', ...cap(8, 300, 12, 400)), facts: pick('facts', ...cap(8, 240, 12, 300)), decisions: pick('decisions', ...cap(6, 240, 8, 300)),
++      rejectedDirections: pick('rejectedDirections', ...cap(6, 240, 8, 300)), openQuestions: pick('openQuestions', ...cap(6, 240, 8, 300)), nextStep: clean(state?.nextStep ?? prev.nextStep, rich ? 600 : 400),
+       participantIds: list([...(prev.participantIds || []), ...(state?.participantIds || []), ...(meta?.participantIds || [])], 16, 40),
+       lastReply: clean(meta?.lastReply ?? prev.lastReply, 600), sourceSessionId: clean(meta?.sourceSessionId ?? prev.sourceSessionId, 100), updatedAt: now, expiresAt: now + ttl * 60000
+     };
+--- a/src/llm/prompt.js
++++ b/src/llm/prompt.js
+@@ -162,6 +162,10 @@
+     '- 不要记临时话题、临时想法；只记以后跟这个人打交道还用得上的。印象过时/不再准确时用 memory_remove 删掉。',
+     '- 每次扫一眼【记忆】，只有自然相关才主动提起；不要为了用记忆而硬聊旧话题。',
+     '- 跨运行仍需继续的话题，用 finish 保存当前假设、关键证据、确认事实、决定、已排除方向、未决问题和下一步。只保存简洁可检查的工作状态，不保存逐步推理、草稿或隐藏思维。',
++    '- **私聊里交接要写细**（这是下一轮接着聊的底稿）：当前话题、已知上下文、已确认事实、未解决问题、下一步意图都填上；',
++      '约定写清"谁答应什么、什么时间"（例：约好 12 点前收尾、周六他没课可以晚睡）；',
++      '他的近况与情绪（工作/课表/身体/心情）、聊到哪儿停了、下次能自然接什么、这轮用过还管用的说法，都记进去；',
++      '每条写成"什么事、什么时候、什么反应"，别只写"聊了聊天"。群里照样克制，一句话能说清的就别铺开。',
+     '- 【上次会话交接】可能过期或被新消息纠正；冲突时以最新消息和可验证事实为准。话题真正结束后用 clearHandoff 清除。',
+     '- 交接里的"已作决定 / 已排除方向 / 下一步"只约束**同一个话题**：对方换了话题（或话题自然结束）就按新话题来，别把上一次的姿态、语气和戒心沿用下去。'
+   ];
+--- a/src/tools/tools-core.js
++++ b/src/tools/tools-core.js
+@@ -2338,7 +2338,7 @@
+     },
+     {
+       name: 'finish',
+-      description: '明确结束本次处理，并把下一次新会话需要的工作状态交接下去。summary 写本轮结论；话题还会继续时补充 topic/hypotheses/evidence/facts/decisions/rejectedDirections/openQuestions/nextStep。只写简洁、可检查的状态，不写逐步隐藏思维。话题已经完成且旧交接不再有用时设 clearHandoff=true。不调用也可以，直接结束文本输出同样代表结束。',
++      description: '明确结束本次处理，并把下一次新会话需要的工作状态交接下去。summary 写本轮结论；话题还会继续时补充 topic/hypotheses/evidence/facts/decisions/rejectedDirections/openQuestions/nextStep。**私聊里要写细**（这是下一轮接着聊的底稿）：约定写清谁答应什么、什么时间，facts 至少 2~3 条具体事实，聊到哪儿停了、下次能自然接什么也写上；群里保持简洁。只写可检查的状态，不写逐步隐藏思维。话题已完成且旧交接不再有用时设 clearHandoff=true。不调用也可以，直接结束文本输出同样代表结束。',
+       parameters: {
+         type: 'object',
+         properties: {
+@@ -2347,38 +2347,38 @@
+           hypotheses: {
+             type: 'array',
+             items: { type: 'string' },
+-            maxItems: 6,
+-            description: '尚未确认、下一轮仍需验证的工作假设'
++            maxItems: 8,
++            description: '尚未确认、下一轮仍需验证的工作假设（私聊里可以多写几条）'
+           },
+           evidence: {
+             type: 'array',
+             items: { type: 'string' },
+-            maxItems: 8,
++            maxItems: 12,
+             description: '支持或反驳假设的关键观察、消息或工具结果'
+           },
+           facts: {
+             type: 'array',
+             items: { type: 'string' },
+-            maxItems: 8,
+-            description: '后续处理必须知道的已确认事实，不要写猜测'
++            maxItems: 12,
++            description: '后续处理必须知道的已确认事实（约定、他的近况、情绪、时间点），不要写猜测'
+           },
+           decisions: {
+             type: 'array',
+             items: { type: 'string' },
+-            maxItems: 6,
+-            description: '已经作出的决定'
++            maxItems: 8,
++            description: '已经作出的决定（私聊里的约定也算）'
+           },
+           rejectedDirections: {
+             type: 'array',
+             items: { type: 'string' },
+-            maxItems: 6,
++            maxItems: 8,
+             description: '已经验证无效、不应在下一轮重复尝试的方向'
+           },
+           openQuestions: {
+             type: 'array',
+             items: { type: 'string' },
+-            maxItems: 6,
+-            description: '仍未解决、需要后续消息确认的问题'
++            maxItems: 8,
++            description: '仍未解决、需要后续消息确认的问题（他说过还没做完、还没答应的都算）'
+           },
+           nextStep: { type: 'string', description: '下次继续时准备做什么或等待什么' },
+           threadDisposition: {

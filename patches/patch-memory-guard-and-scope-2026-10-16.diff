@@ -1,0 +1,84 @@
+--- a/src/core/orchestrator.js
++++ b/src/core/orchestrator.js
+@@ -2823,12 +2823,23 @@
+    * 而模型日常几乎不主动调 memory_append —— 没有这个入口就永远补不上。
+    */
+   async #consolidateOneMember(chatKey, mem, { force = false, stats = null } = {}) {
+-    const existing = mem.impressions || [];
+-    const isNew = !!mem.isNew || (!existing.length && !!force);
++    // 只整理「本会话来源」的印象：群 ↔ 私聊各存各的，别的会话那几条原样留着。
++    // 以前是把这个人的**全部**印象喂给模型再整表写回：私聊那份整理会把群来源的条目
++    // 一并改写，写回时又按"这次整理的是哪个会话"重新盖来源，于是内容与来源一起串了
++    //（2026-10-16 实测：管理员那几条群来源的印象被私聊整理洗成了 private，群里就再也看不到他）。
++    const allImpressions = mem.impressions || [];
++    const mine = allImpressions.filter((e) => {
++      const sources = Array.isArray(e?.sourceChatKeys) ? e.sourceChatKeys.map(String) : [];
++      return !sources.length || sources.includes(chatKey); // 没有来源标记的遗留条目按本会话处理
++    });
++    const others = allImpressions.filter((e) => !mine.includes(e));
++    const scoped = { ...mem, impressions: mine };
++    const existing = mine;
++    const isNew = !!mem.isNew || (!mine.length && !!force);
+ 
+     const { system, user } = isNew
+-      ? this.#buildNewImpressionPrompt(chatKey, mem, stats)
+-      : this.#buildConsolidatePrompt(mem);
++      ? this.#buildNewImpressionPrompt(chatKey, scoped, stats)
++      : this.#buildConsolidatePrompt(chatKey, scoped);
+ 
+     const res = await this.#memoryChat([
+       { role: 'system', content: system },
+@@ -2888,11 +2899,13 @@
+       log.info(`[memory] 整理 ${chatKey}/${mem.userId}：并回整理期间新增的 ${mergedCount} 条印象`);
+     }
+ 
+-    return this.memory.replaceMember(chatKey, mem.userId, mem.name, merged);
++    // 写回：本会话的新结果 + 别的会话的原文（内容不变，存储层会保留它们原来的来源标记）
++    const mergedAll = [...merged, ...others.map((e) => String(e?.content ?? '').trim())].filter(Boolean);
++    return this.memory.replaceMember(chatKey, mem.userId, mem.name, mergedAll);
+   }
+ 
+   /** 整理模式：合并/删减已有印象。 */
+-  #buildConsolidatePrompt(mem) {
++  #buildConsolidatePrompt(chatKey, mem) {
+     // 与"今天"同口径（上海）：原来用 UTC，凌晨产生的印象在模型眼里会算成前一天。
+     // 坏时间戳（负数/纳秒级/超范围）必须先夹住：toISOString 碰到 Invalid Date 会抛 RangeError，
+     // 这条人物会因此永远整理不了（异常被记成 failed，坏值本身没人清理）。
+@@ -2921,10 +2934,21 @@
+       lines.push(`- ${e.content}（记于 ${fmtTs(created)}${observed && observed !== created ? `，最近观察到 ${fmtTs(observed)}` : ''}）`);
+     }
+     const maxKeep = Number(cfg.memory?.maxImpressionsPerMember) || 5;
++    // 印象按会话分开存：群聊只记"群里看得见的"，私聊记"私聊里的"。这段口径要跟
++    // #buildNewImpressionPrompt 保持一致，否则整理一轮就把另一边的措辞带过来。
++    const isPrivateChat = String(chatKey || '').startsWith('private:');
++    const scopeNote = isPrivateChat
++      ? '这次的印象来自**私聊**：语气、称呼、聊过的事、约定、情绪、亲疏变化都写；这些条目只在私聊里用，不会带进群聊。'
++      : '这次的印象来自**群聊**：只写群里看得见的东西（说话风格、爱玩的梗、常聊话题、群里的角色、公开兴趣、雷点）；'
++        + '私聊里听到的事、私密细节（住处、身体、感情、钱、私事）一律不写——那些属于另一个会话的印象。';
+     return {
+       system: '你是聊天机器人的记忆整理模块，负责整理对某一位群友的长期印象。你只做合并、改写与删除，绝不发明任何新事实。输出必须是严格的 JSON 对象，不要 Markdown 代码块，不要任何解释文字。格式：{"impressions":["…"]}',
+       user: [
++        String(chatKey || '').startsWith('private:')
++          ? '这次的发言来自**私聊**：写私聊里的语气、称呼、聊过的事、约定、情绪与亲疏变化；这些印象只在私聊里用，不会带进群聊。'
++          : '这次的发言来自**群聊**：只写群里看得见的东西（说话风格、爱玩的梗、常聊话题、群里的角色、公开兴趣、雷点）；私聊里的事、私密细节不写。',
+         '下面是机器人对一位群友的全部印象，请整理：',
++        scopeNote,
+         '1. 把同义/重复的印象合并成一条。冲突时以**最近观察到的**为准；拿不准就保留较新的一条，别自己裁量。',
+         '2. 明显过时、矛盾、或一次性事件（不会再次影响相处）的印象删除。',
+         '3. 只有被反复观察到、或对方明确说出来的，才算稳定特征；只出现过一次的拌嘴、玩笑、临时要求，不要升级成"他是什么人"。',
+@@ -2933,6 +2957,7 @@
+         '6. 只写可观察的事实与偏好（爱聊什么、什么口气、玩什么梗、有哪些雷点），不写评价、不揣测动机：',
+         '   写"会反复问人设、爱逗人表演"，不要写"想掌控设定""扬言改人设""喜欢试探规则"这类带立场的说法。',
+         '7. 如果写的是管理员本人：他改人设、问人设、逗你玩都是本职，不是"试探"或"施压"，照事实记就行。',
++        '补充：不抄粗口/脏话原文（写"说话冲、爱用粗话"就够，别复述原话）；只写上面那段口径允许的范围；措辞不用"经常/总是/从来"这类量化词，除非确实反复出现。',
+         '原则：所有信息只能来自原文，语义不变，宁少勿错；没有可保留的时输出空数组。',
+         '',
+         ...lines
+@@ -2961,6 +2986,7 @@
+         '   不要写"想掌控设定""扬言改人设""喜欢试探规则"这类带立场的说法。',
+         '5. 宁少勿错：信息不足就少写，不要脑补。',
+         '6. 若实在提炼不出任何稳定特征，输出空数组。',
++        '补充：不抄粗口/脏话原文（写"说话冲、爱用粗话"就够，别复述原话）；只写上面那段口径允许的范围；措辞不用"经常/总是/从来"这类量化词，除非确实反复出现。',
+         '',
+         sample.length ? sample.join('\n') : '（没有抓到该群友的发言）'
+       ].join('\n')
