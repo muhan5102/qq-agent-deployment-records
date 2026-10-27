@@ -772,7 +772,7 @@ function buildReport({
   const lines = [];
   lines.push('[QQ-bot] 运行简报');
   lines.push(`昨日统计：${dayKey}（${weekday}）`);
-  lines.push(`今日实时：截至 ${now.dayKey} ${String(now.hour).padStart(2, '0')}:${String(now.minute).padStart(2, '0')}`);
+  lines.push(`附录：今日实时参考截至 ${now.dayKey} ${String(now.hour).padStart(2, '0')}:${String(now.minute).padStart(2, '0')}`);
   if (late) lines.push('状态：补发（常规 08:00 发送时段已过或任务曾经中断）');
   lines.push('');
 
@@ -1116,9 +1116,9 @@ function htmlTrend(rows) {
   </div>`;
 }
 
-const TODAY_PIE_CID = 'today-usage-pie@qq-bot.local';
+const YESTERDAY_PIE_CID = 'yesterday-usage-pie@qq-bot.local';
 
-function htmlTodayPie(hist) {
+function htmlYesterdayPie(hist, dayKey) {
   const cached = Math.max(0, num(hist?.cachedTokens));
   const uncached = Math.max(0, num(hist?.promptTokens) - cached);
   const output = Math.max(0, num(hist?.completionTokens));
@@ -1132,12 +1132,12 @@ function htmlTodayPie(hist) {
     <td align="right" width="52" style="padding:5px 0 5px 8px;font-family:${MONO};font-size:12px;color:#9ca3af;white-space:nowrap;">${pct(value)}</td>
   </tr>`;
   return `<div style="margin-top:14px;padding:14px;background:#fbfdff;border:1px solid #e5e7eb;border-radius:10px;">
-    <div style="font-family:${FONT};font-size:14px;font-weight:600;color:#374151;">今日实时 Token 构成 · ${esc(now.dayKey)}</div>
-    <div style="font-family:${FONT};font-size:12px;color:#9ca3af;line-height:1.7;margin-top:3px;">截至 ${String(now.hour).padStart(2, '0')}:${String(now.minute).padStart(2, '0')} · 总 Token ${tok(total)}</div>
+    <div style="font-family:${FONT};font-size:14px;font-weight:600;color:#374151;">昨日 Token 构成 · ${esc(dayKey)}</div>
+    <div style="font-family:${FONT};font-size:12px;color:#9ca3af;line-height:1.7;margin-top:3px;">统计日 ${esc(dayKey)} · 总 Token ${tok(total)}</div>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;">
       <tr>
         <td width="42%" align="center" valign="middle" style="padding:4px 8px 4px 0;">
-          <img src="cid:${TODAY_PIE_CID}" width="160" alt="今日 Token 构成饼图" style="display:block;width:160px;max-width:100%;height:auto;border:0;">
+          <img src="cid:${YESTERDAY_PIE_CID}" width="160" alt="昨日 Token 构成饼图" style="display:block;width:160px;max-width:100%;height:auto;border:0;">
         </td>
         <td valign="middle" style="padding-left:8px;">
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
@@ -1153,10 +1153,10 @@ function htmlTodayPie(hist) {
 
 function reportInlineImages(ctx) {
   return [{
-    cid: TODAY_PIE_CID,
-    data: makeUsagePiePng(ctx?.trend?.todayHist),
+    cid: YESTERDAY_PIE_CID,
+    data: makeUsagePiePng(ctx?.hist),
     contentType: 'image/png',
-    filename: 'today-usage.png'
+    filename: 'yesterday-usage.png'
   }];
 }
 
@@ -1295,7 +1295,7 @@ function buildReportHtml({
     ])
     : `<div style="font-family:${FONT};font-size:14px;color:#9ca3af;padding:12px 0;">该统计日无台账快照（机器人服务可能未运行）。</div>`;
   body += htmlSection(`昨日核心概览 · ${dayKey}`, overview);
-  body += htmlTodayPie(trend.todayHist);
+  body += htmlYesterdayPie(hist, dayKey);
   body += htmlSection('平台与模型调用', htmlModels(modelUsage));
   body += htmlSection('功能调用明细', htmlFeatureUsage(featureUsage, featureServices));
 
@@ -1366,7 +1366,7 @@ function buildReportHtml({
   return mailShell({
     accent,
     title: '运行简报',
-    subtitle: `昨日统计 ${dayKey}（${weekday}） · 今日实时截至 ${String(now.hour).padStart(2, '0')}:${String(now.minute).padStart(2, '0')}${late ? ' · 补发' : ''}`,
+    subtitle: `昨日统计 ${dayKey}（${weekday}） · 邮件生成于 ${String(now.hour).padStart(2, '0')}:${String(now.minute).padStart(2, '0')}${late ? ' · 补发' : ''}`,
     body,
     footnote: FOOTNOTE,
     preheader
@@ -1408,10 +1408,23 @@ function runSelfTests() {
   check('饼图 PNG 尺寸', pie.readUInt32BE(16) === 96 && pie.readUInt32BE(20) === 96);
   const mime = buildMimeBody({
     text: 'plain',
-    html: '<img src="cid:today-usage-pie@qq-bot.local">',
-    inlineImages: [{ cid: TODAY_PIE_CID, data: pie, filename: 'today-usage.png' }]
+    html: '<img src="cid:yesterday-usage-pie@qq-bot.local">',
+    inlineImages: [{ cid: YESTERDAY_PIE_CID, data: pie, filename: 'yesterday-usage.png' }]
   });
-  check('内嵌图片 MIME', mime.includes('multipart/related') && mime.includes(`Content-ID: <${TODAY_PIE_CID}>`) && mime.includes('image/png'));
+  check('内嵌图片 MIME', mime.includes('multipart/related') && mime.includes(`Content-ID: <${YESTERDAY_PIE_CID}>`) && mime.includes('image/png'));
+  const pieHtml = buildReportHtml({
+    dayKey: '2026-10-20',
+    hist: { promptTokens: 850, cachedTokens: 600, completionTokens: 50, totalTokens: 900, runs: 1, estimatedYuan: 0.01, webSearchCount: 0, unpricedRuns: 0 },
+    balance: { ok: false, supported: true, reason: '测试不发余额' },
+    trend: { presentDays: 0, todayHist: { promptTokens: 1, completionTokens: 1, totalTokens: 2, cachedTokens: 0 } },
+    modelUsage: null,
+    featureUsage: {},
+    featureServices: {},
+    incidents: [],
+    late: false
+  });
+  check('饼图固定昨日统计日', pieHtml.includes('昨日 Token 构成 · 2026-10-20'));
+  check('饼图不再冒充今日实时', !pieHtml.includes('今日实时 Token 构成'));
 
   const oldMap = { '2025-01-01': 1, '2026-01-01': 2 };
   pruneDayMap(oldMap, '2026-01-01');
@@ -1453,8 +1466,10 @@ function runSelfTests() {
     };
     fs.writeFileSync(path.join(sessionsDir, 'known.json'), JSON.stringify(session));
     fs.writeFileSync(path.join(trashDir, 'unknown.json'), JSON.stringify({ ...session, id: 'unknown', vendor: '' }));
+    fs.writeFileSync(path.join(sessionsDir, 'unknown-live.json'), JSON.stringify({ ...session, id: 'unknown-live', vendor: '' }));
     const usage = modelUsageForDay('2026-10-20', { totalTokens: 850 }, sessionsDir);
-    check('未知渠道移入回收目录后不计入', usage.rows.length === 1 && usage.rows[0].platform !== '未知渠道');
+    check('未知渠道无论在活动目录还是回收目录都不计入', usage.rows.length === 1 && usage.rows.every((row) => row.platform !== '未知渠道'));
+    check('被过滤的未知渠道不会误报成无留档辅助调用', usage.missingTokens === 0);
     check('搜索实际服务元数据', usage.features.search?.[0]?.service === 'aggregate');
     check('搜索实际来源元数据', usage.features.search?.[0]?.serviceModel === 'zhipu,bing');
   } finally {
@@ -1698,6 +1713,7 @@ function modelUsageForDay(dayKey, hist = null, sessionsDir = SESSIONS_DIR) {
   const groups = new Map();
   const featureGroups = new Map();
   const platformMap = platformDisplayMap();
+  let ignoredUnknownTokens = 0;
   let files = [];
   try { files = fs.readdirSync(sessionsDir).filter((file) => file.endsWith('.json')); } catch {
     return { rows: [], calls: 0, totalTokens: 0, missingTokens: num(hist?.totalTokens), features: {} };
@@ -1710,7 +1726,11 @@ function modelUsageForDay(dayKey, hist = null, sessionsDir = SESSIONS_DIR) {
     const completion = num(completionTokens);
     const cached = Math.min(prompt, num(cachedTokens));
     if (!prompt && !completion) return;
-    const rawPlatform = String(vendor || '未知渠道').trim() || '未知渠道';
+    const rawPlatform = String(vendor || '').trim();
+    if (!rawPlatform) {
+      ignoredUnknownTokens += prompt + completion;
+      return;
+    }
     const platform = platformMap.get(rawPlatform.toLowerCase()) || rawPlatform;
     const modelId = String(model || '未知模型').trim() || '未知模型';
     const key = `${platform}\u0000${modelId}`;
@@ -1735,7 +1755,8 @@ function modelUsageForDay(dayKey, hist = null, sessionsDir = SESSIONS_DIR) {
     service = '', serviceModel = '', serviceRoute = ''
   }) => {
     if (at < from || at >= to) return;
-    const rawPlatform = String(vendor || '未知渠道').trim() || '未知渠道';
+    const rawPlatform = String(vendor || '').trim();
+    if (!rawPlatform) return;
     const platform = platformMap.get(rawPlatform.toLowerCase()) || rawPlatform;
     const modelId = String(model || '未知模型').trim() || '未知模型';
     if (!platform && !modelId) return;
@@ -1863,8 +1884,8 @@ function modelUsageForDay(dayKey, hist = null, sessionsDir = SESSIONS_DIR) {
     rows,
     calls,
     totalTokens,
-    missingTokens: Math.max(0, num(hist?.totalTokens) - totalTokens),
-    extraTokens: Math.max(0, totalTokens - num(hist?.totalTokens)),
+    missingTokens: Math.max(0, num(hist?.totalTokens) - totalTokens - ignoredUnknownTokens),
+    extraTokens: Math.max(0, totalTokens + ignoredUnknownTokens - num(hist?.totalTokens)),
     features
   };
 }
@@ -1929,7 +1950,7 @@ async function buildReportContext(dayKey, bh, hist, { incidents = null } = {}) {
 }
 
 function reportSubject(ctx) {
-  const parts = [`[QQ-bot] 运行简报｜昨日 ${ctx.dayKey.slice(5)} + 今日实时`];
+  const parts = [`[QQ-bot] 运行简报｜昨日 ${ctx.dayKey.slice(5)}`];
   if (ctx.hist) {
     parts.push(`${yuan(ctx.hist.estimatedYuan)} · ${ctx.hist.runs} 次`);
   } else {
@@ -1951,7 +1972,7 @@ if (process.argv.includes('--test-mail')) {
     '',
     buildReport(ctx),
     '',
-    '（正式运行简报每天 08:00 后发一封：昨日统计 + 今日实时；任务中断后会在恢复运行时补发。）'
+    '（正式运行简报每天 08:00 后发一封，以昨日统计为主并附今日实时参考；任务中断后会在恢复运行时补发。）'
   ].join('\n');
   try {
     const res = await sendMail({
