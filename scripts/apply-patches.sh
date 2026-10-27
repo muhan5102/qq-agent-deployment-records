@@ -22,6 +22,9 @@ case "$version" in
   0.9.10)
     entry="$ENTRY_DIR/apply-patches-v0.9.10.sh"
     ;;
+  0.9.11)
+    entry="$ENTRY_DIR/apply-patches-v0.9.11.sh"
+    ;;
   *)
     echo "没有为版本 $version 配置可启动的本地补丁入口，拒绝启动。" >&2
     exit 2
