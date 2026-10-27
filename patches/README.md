@@ -6,17 +6,25 @@
 > 补丁只描述"从上游原版改成什么样"，**不含任何部署信息**（服务器地址、账号、群号、
 > 群成员昵称等一律不写进补丁与说明）。真实值见本地未纳管的 `LOCAL-NOTES.md`。
 
-> **2026-10-20 起基线为 v0.9.3**：服务器改用合并补丁 `patch-local-all-0.9.3-2026-10-20.diff`
-> （21 个文件，含本地私有补丁，**仅保留在服务器与本地未纳管目录，不进仓库**）。
-> 下面这张表是 0.8.5 时期的拆分记录，保留作历史与回滚参考；0.9.3 的迁移说明见 `CHANGELOG.md`。
+> **2026-10-26 起基线为 v0.9.10**：服务器改用合并补丁
+> `patch-local-all-0.9.10-2026-10-26.diff`（53 个目标文件，含本地私有补丁，
+> **仅保留在服务器与本地未纳管目录，不进仓库**）。
+> 启动钩子按程序版本分流：v0.9.5、v0.9.6 继续调用保留的旧补丁链，v0.9.10 调用新的单文件补丁；
+> 这样部署失败自动回滚后，旧版仍可启动。下面是历史拆分记录，保留作回滚参考。
 
 ## 清单
 
 | 补丁 | 目标文件 | 适用于 | 作用 |
 |---|---|---|---|
-| [patch-feature-provider-meta-2026-10-21.diff](patch-feature-provider-meta-2026-10-21.diff) | `src/tools/tools-core.js` + `src/tools/audio-transcribe.js` | v0.9.4 | 搜索与语音转写工具结果记录实际 service/model/route，供运行简报准确区分聚合搜索、QQ 自带转写和外部 ASR |
-| [patch-undirected-text-nudge-2026-10-21.diff](patch-undirected-text-nudge-2026-10-21.diff) | `src/core/orchestrator.js` | v0.9.4 | `probability` / `lifecycle` 触发只写了正常文本却未调用工具时提醒一次用 `send_message` 重发；内部备注、`done/ok` 等完成标记和定向消息不重复处理 |
+| [patch-feature-provider-meta-2026-10-21.diff](patch-feature-provider-meta-2026-10-21.diff) | `src/tools/tools-core.js` + `src/tools/audio-transcribe.js` | v0.9.4、v0.9.5 | 搜索与语音转写工具结果记录实际 service/model/route，供运行简报准确区分聚合搜索、QQ 自带转写和外部 ASR |
+| [patch-undirected-text-nudge-2026-10-21.diff](patch-undirected-text-nudge-2026-10-21.diff) | `src/core/orchestrator.js` | v0.9.4、v0.9.5 | `probability` / `lifecycle` 触发只写了正常文本却未调用工具时提醒一次用 `send_message` 重发；内部备注、`done/ok` 等完成标记和定向消息不重复处理 |
+| [patch-daily-reminders-2026-10-21.diff](patch-daily-reminders-2026-10-21.diff) | `src/core/reminders.js` + 工具/控制台/UI | v0.9.4、v0.9.5 | 新增每日固定时刻循环提醒：稳定系列 ID、重复创建去重、成功后推进次日、离线跳期、整系列取消；一次性提醒保持兼容 |
 | [patch-memory-qq-2026-10-09.diff](patch-memory-qq-2026-10-09.diff) | `src/memory/memory-global.js` | `qq-agent-plus` v0.8.1、v0.8.3、v0.8.4、v0.8.5 | 让「对群友的全局印象」每行在昵称后带上 `(QQ 号)`，认人以号为准 |
+| [patch-memory-source-replace-2026-10-22.diff](patch-memory-source-replace-2026-10-22.diff) | `src/memory/global-person-memory-store.js` | v0.9.4、v0.9.5 | 人物记忆的“整人替换”只替换当前会话来源，群聊与私聊各自的印象不会被后整理的会话覆盖 |
+| [patch-render-web-2026-10-22.diff](patch-render-web-2026-10-22.diff) | `src/core/orchestrator.js` + `src/llm/prompt.js` + `src/tools/` | v0.9.5 | 新增按需启用的动态网页渲染工具，复用服务器本地 Crawl4AI/Chromium，读取 JavaScript 页面；限制单并发、55 秒超时和 3 万字符输出 |
+| [patch-video-link-hybrid-2026-10-22.diff](patch-video-link-hybrid-2026-10-22.diff) | 视频/音频工具、提示词与工具过滤 | v0.9.5 | 新增 B 站、YouTube、抖音视频链接读取；B 站优先本地字幕/音轨，其他平台走 `yt-dlp`，深度模式可调用 BiliNote 在线精读 |
+| [patch-video-intent-2026-10-23.diff](patch-video-intent-2026-10-23.diff) | `src/tools/video-link.js` + `src/core/orchestrator.js` | v0.9.5 | 当前批次明确要求“详细分析/完整分析/认真看完/完整笔记”时，确定性强制视频工具进入深度模式；否定句和普通询问不触发 |
+| [patch-video-deep-context-2026-10-24.diff](patch-video-deep-context-2026-10-24.diff) | `src/tools/video-link.js` + `src/core/orchestrator.js` + `src/onebot/onebot.js` | v0.9.5 | 分享卡片补提视频 URL；扩展“详细看看/认真看/从头看”等意图；追问不带链接时绑定最近人类消息中的视频，先取 BiliNote 笔记，再结合本轮要求组织回复 |
 | [patch-sticker-note-40-2026-10-14.diff](patch-sticker-note-40-2026-10-14.diff) | `src/onebot/sticker-manager.js` | v0.8.5 | 表情备注上限 24 → 40 字，让"谁+在干什么+适合什么场合"写得完 |
 | [patch-memory-guard-and-scope-2026-10-16.diff](patch-memory-guard-and-scope-2026-10-16.diff) | `src/core/orchestrator.js` | v0.8.5 | 印象整理器的约束（不抄粗口、不用量化词）+ **按会话分口径与分来源**：群只整理群来源、私聊只整理私聊来源，互不串 |
 | [patch-text-nudge-2026-10-16.diff](patch-text-nudge-2026-10-16.diff) | `src/core/orchestrator.js` | v0.8.5 | 模型把回复写成文本、没调 `send_message` 时，提醒它一次改用工具重发（不替它发） |

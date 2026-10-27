@@ -10,6 +10,8 @@ work/
 _tmp_*
 $null
 /tsc*.txt
+__pycache__/
+*.pyc
 # 私聊专属规则补丁只保留在本地未纳管目录
 /patches/patch-private-*.diff
 # 内容安全过滤补丁只在本地维护
