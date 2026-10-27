@@ -1,7 +1,8 @@
 param(
     [string]$Branch = 'main',
     [string]$DenyListPath = 'work/push-denylist.txt',
-    [string]$MessageDenyListPath = 'work/push-message-denylist.txt'
+    [string]$MessageDenyListPath = 'work/push-message-denylist.txt',
+    [switch]$AllowEmptyRemote
 )
 
 $ErrorActionPreference = 'Stop'
@@ -152,7 +153,7 @@ try {
 } catch {
     $remoteMain = ''
 }
-if (-not $remoteMain) {
+if (-not $remoteMain -and -not $AllowEmptyRemote) {
     Add-Failure '无法读取 origin/main，先执行 git fetch origin main'
 }
 
@@ -172,7 +173,7 @@ if ($failures.Count -gt 0) {
 'PUSH_PREFLIGHT=PASS'
 "BRANCH=$currentBranch"
 "HEAD=$((git rev-parse HEAD).Trim())"
-"ORIGIN_MAIN=$remoteMain"
+"ORIGIN_MAIN=$(if ($remoteMain) { $remoteMain } else { 'empty' })"
 "FORCE_WITH_LEASE_REQUIRED=$($forceRequired.ToString().ToLowerInvariant())"
 Pop-Location
 exit 0
