@@ -148,9 +148,10 @@ foreach ($file in $trackedFiles) {
 }
 
 $remoteMain = ''
-try {
-    $remoteMain = (git rev-parse 'origin/main' 2>$null).Trim()
-} catch {
+$remoteMainRaw = git rev-parse --verify --quiet 'origin/main' 2>$null
+if ($LASTEXITCODE -eq 0) {
+    $remoteMain = "$remoteMainRaw".Trim()
+} else {
     $remoteMain = ''
 }
 if (-not $remoteMain -and -not $AllowEmptyRemote) {
