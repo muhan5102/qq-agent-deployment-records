@@ -1,0 +1,50 @@
+--- a/src/memory/global-person-memory-store.js
++++ b/src/memory/global-person-memory-store.js
+@@ -278,7 +278,8 @@
+     const now = Date.now();
+     const incoming = (Array.isArray(contents) ? contents : [contents])
+       .map((x) => clean(x)).filter(Boolean).slice(0, 20);
+-    const hadSource = old.sourceChatKeys.includes(String(chatKey || '').trim());
++    const source = String(chatKey || '').trim();
++    const hadSource = old.sourceChatKeys.includes(source);
+     let member;
+     if (old.impressions.length && !hadSource) {
+       // A globally known person can appear in a new chat before that chat has ever written memory.
+@@ -300,14 +301,26 @@
+       }
+     } else {
+       const sources = sourceKeys([...old.sourceChatKeys, ...old.impressions.flatMap((x) => x.sourceChatKeys || []), chatKey]);
++      // “整人替换”只替换当前会话来源的条目。同一人物在群聊和私聊各自的条目必须
++      // 独立保留，否则后整理的会话会把先整理的会话印象全部覆盖掉。
++      const preserved = source
++        ? (old.impressions || []).filter((entry) => !sourceKeys(entry.sourceChatKeys).includes(source))
++        : [];
++      const preservedContents = new Set(preserved.map((entry) => String(entry.content)));
++      const currentEntries = source
++        ? (old.impressions || []).filter((entry) => sourceKeys(entry.sourceChatKeys).includes(source))
++        : [];
+       // 内容没变的条目沿用旧时间戳 —— 整理只是"改写/合并"，不是"重新观察到"。
+       // 以前这里一律赋 now：每次整理都把全部印象的年龄刷成当天，展示端的日期前缀
+       // 变成"上次整理日期"，"90 天没再观察到就删"这类规则也永远不成立。
+-      const previous = new Map((old.impressions || []).map((e) => [String(e.content), e]));
++      const previous = new Map(currentEntries.map((e) => [String(e.content), e]));
+       member = {
+         version: 2, userId: uid, name: finalName, sourceChatKeys: sources,
+         updatedAt: now, lastConsolidatedAt: old.lastConsolidatedAt || 0,
+-        impressions: incoming.map((content) => {
++        impressions: [...preserved, ...incoming.filter((content) => {
++          const key = String(content);
++          return previous.has(key) || !preservedContents.has(key);
++        }).map((content) => {
+           const prev = previous.get(String(content));
+           const createdAt = Number(prev?.createdAt) || now;
+           // 每条印象**自己**的来源要如实：正文原样保留的沿用旧来源，新写/改写过的只算这次整理的会话。
+@@ -322,7 +335,7 @@
+             origin: prev ? normalizeOrigin(prev.origin) : normalizeOrigin(origin),
+             sourceChatKeys: prevSources.length ? prevSources : sourceKeys([chatKey])
+           };
+-        })
++        })]
+       };
+     }
+     // 同名的人不止一个时，"只有名字"的旧条目到底是谁的就说不准了：

@@ -1,0 +1,974 @@
+--- a/src/core/orchestrator.js
++++ b/src/core/orchestrator.js
+@@ -1988,7 +1988,7 @@
+       // 模型往返（send_voice 的描述还极具诱导性）。与上面几项同一口径（2026-10-03 全量审查）。
+       if (!ttsConfigured(cfg) && d.name === 'send_voice') return false;
+       if (cfg.reminders?.enabled === false && d.name === 'remind') return false;
+-      if (!searchEnabled && (d.name === 'web_search' || d.name === 'web_fetch' || d.name === 'render_web_page')) return false;
++      if (!searchEnabled && (d.name === 'web_search' || d.name === 'web_fetch' || d.name === 'render_web_page' || d.name === 'inspect_video_link')) return false;
+       if (!selfWakeEnabled && d.name === 'schedule_wake') return false;
+       // 群游戏引擎关掉：group_game 工具一并摘掉 —— 提示词侧（prompt.js 玩法与工具箱）
+       // 只在开启时教"主持小游戏"，工具表却恒在，模型仍会去调一个必然报错的工具
+--- a/src/llm/prompt.js
++++ b/src/llm/prompt.js
+@@ -478,6 +478,7 @@
+       '- 搜过以后，回话要让人看得出你查过：把结论自然带一句——搜到了就说"搜了下，就是XX"；没搜到出处就照实讲（"搜了两轮，只有字面意思……这什么新梗？"），别让搜了跟没搜一个样，也别把"搜不到"说成"没这回事"（2026-10-12 用户反馈："搜了怎么回答还是一样的"）。',
+       '- 群友直接发来 URL 并问能不能看到/写了什么时，直接用 web_fetch 抓取该 URL 读正文，不要凭记忆猜。',
+       '- web_fetch 只拿到导航、空壳或很少文字，或者页面明显由 JavaScript 加载、需要看自动加载的评论区时，改用 render_web_page 渲染。它不能登录，也不能保证拿到需要手动点“查看更多”的全部评论；拿不全就照实说。',
++      '- 群友发来 B 站、YouTube 或抖音视频链接并问内容时，优先调用 inspect_video_link：普通问“讲了什么”用默认 quick；只有明确问画面、动作、人物外形或视觉细节时才设 includeFrames=true。用户明确要求“认真看完整视频/做详细笔记”时才用 deep，deep 会消耗在线服务积分且可能等待较久。',
+       '- 需要搜索时允许多走几步：连续 web_search / web_fetch 2~3 步，换关键词、打开页面、交叉验证后再回复；搜索过程中不需要先回复，拿到结果再回。事实性问题可以比闲聊稍微多写一点，但仍要简洁。'
+     );
+   } else {
+--- a/src/llm/safe-fetch.js
++++ b/src/llm/safe-fetch.js
+@@ -274,13 +274,13 @@
+   throw new Error('重定向次数过多，已停止');
+ }
+ 
+-/** 下载二进制（图片，≤maxBytes 字节），返回 { buffer, contentType }。 */
+-export async function safeFetchBinary(urlString, maxBytes = 12 * 1024 * 1024, signal) {
++/** 下载二进制（图片/音视频，≤maxBytes 字节），返回 { buffer, contentType }。 */
++export async function safeFetchBinary(urlString, maxBytes = 12 * 1024 * 1024, signal, { headers } = {}) {
+   const allowPrivate = getConfig().security?.allowPrivateImageHosts === true;
+   let { url, ip } = await validateFetchUrl(urlString, { allowPrivate });
+   for (let i = 0; i <= MAX_REDIRECTS; i++) {
+     signal?.throwIfAborted();
+-    const result = await requestOnce(url, ip, { asBinary: true, maxBytes: maxBytes + 1, signal });
++    const result = await requestOnce(url, ip, { asBinary: true, maxBytes: maxBytes + 1, signal, headers });
+     if ([301, 302, 303, 307, 308].includes(result.statusCode)) {
+       if (!result.redirect) throw new Error(`重定向缺少 Location: ${result.statusCode}`);
+       const next = new URL(result.redirect, url).toString();
+--- a/src/tools/audio-transcribe.js
++++ b/src/tools/audio-transcribe.js
+@@ -394,6 +394,64 @@
+   }
+ }
+ 
++/**
++ * 本地音/视频文件 → 转写。视频链接工具下载到临时文件后复用同一套供应商、
++ * 配额、切片和口误提示，避免为在线视频再复制一份 ASR 逻辑。
++ */
++export async function transcribeAudioFile(ctx, inputPath, { name = '', signal = ctx?.signal } = {}) {
++  const cfg = getConfig();
++  if (!asrConfigured(cfg)) {
++    return { ok: false, error: '语音识别还没配好，无法转写视频音轨。请管理员在控制台「设置 → 语音转文字」里把当前供应商填齐（或设环境变量 ASR_API_KEY）' };
++  }
++  const quota = consumeAsrQuota(Date.now(), cfg, ctx.chatKey);
++  if (!quota.ok) {
++    return {
++      ok: false,
++      error: quota.scope === 'chat'
++        ? `本会话本小时的语音转写次数已用完（每会话上限 ${asrMaxPerHourPerChat(cfg)} 次/小时），稍后再试`
++        : `本小时全局的语音转写次数已用完（上限 ${asrMaxPerHour(cfg)} 次/小时），稍后再试`
++    };
++  }
++  let pcm;
++  try {
++    pcm = await ffmpegToPcm(inputPath, { signal });
++  } catch (e) {
++    refundAsrQuota(ctx.chatKey, quota.at);
++    return { ok: false, error: String(e?.message ?? e) };
++  }
++  const pacedLimit = pacedAudioLimitSeconds(cfg, asrProvider(cfg));
++  if (pacedLimit > 0 && pcm.length > pacedLimit * 32000) {
++    const seconds = Math.round(pcm.length / 32000);
++    refundAsrQuota(ctx.chatKey, quota.at);
++    return {
++      ok: false,
++      error: `音频太长（${seconds} 秒）：当前这家的转写要按音频实际时长逐帧推流，`
++        + `一次运行时限里大约只能转 ${pacedLimit} 秒。可以换「火山 / 硅基流动」这类一次上传的服务，或把视频截短后再发`
++    };
++  }
++  try {
++    const provider = asrProvider(cfg);
++    const model = provider === 'local'
++      ? String(asrLocalModel(cfg) || 'whisper-local')
++      : String(cfg?.asr?.model || '');
++    const text = await runProvider(cfg, pcm, { signal });
++    const caveat = speechCaveat(analyzeSpeechiness(pcm));
++    if (!text?.trim()) {
++      return { ok: false, error: caveat ? '这段视频音轨里没有识别到人声（可能只有音乐/音效）' : '语音识别没有返回内容（可能整段是静音/无语音）' };
++    }
++    return {
++      ok: true,
++      text: text.trim(),
++      caveat,
++      provider,
++      model,
++      route: 'external'
++    };
++  } catch (e) {
++    return { ok: false, error: `语音识别失败：${String(e?.message ?? e)}` };
++  }
++}
++
+ /** 主入口：给 tools-core 的 get_message_audio 工具用，返回转写文本。 */
+ export async function transcribeMessageAudio(ctx, entry) {
+   const target = await currentMessageAudioUrl(ctx, entry);
+--- a/src/tools/tools-core.js
++++ b/src/tools/tools-core.js
+@@ -162,6 +162,7 @@
+ import { convertGifToStillStrip, convertVideoToFrameStrip, convertStillImageToJpeg, fetchOversizedImageAsJpeg } from './image-downsample.js';
+ import { transcribeMessageAudio } from './audio-transcribe.js';
+ import { renderWebPage } from './render-web.js';
++import { biliNoteConfigured, inspectVideoLink } from './video-link.js';
+ import { memoryVisibilityOf } from '../core/memory-visibility.js';
+ 
+ 
+@@ -2484,6 +2485,37 @@
+         }
+       }
+     },
++    {
++      name: 'inspect_video_link',
++      description: '读取 B 站、YouTube 或抖音视频链接。默认 mode=quick：优先字幕，没有字幕就转写音轨，返回标题、简介和内容材料；只有用户明确问画面、动作、人物外形或视觉细节时，才把 includeFrames 设为 true。YouTube 本地直连失败且已配置 BiliNote 时，会自动回退在线解析并消耗积分。mode=deep 主动调用 BiliNote 在线精读服务，'
++        + (biliNoteConfigured()
++          ? '当前已配置，会消耗账户积分，而且可能等待一两分钟；只有用户明确要求“详细笔记/认真分析整个视频”才使用。'
++          : '当前未配置 API Key，会回退本地模式。'),
++      parameters: {
++        type: 'object',
++        properties: {
++          url: { type: 'string', description: 'B 站、YouTube 或抖音视频链接；也支持 b23.tv 短链、BV/av 号或包含链接的分享文本' },
++          mode: { type: 'string', enum: ['quick', 'deep'], description: 'quick=本地字幕/转写；deep=BiliNote 在线详细精读，消耗积分' },
++          includeFrames: { type: 'boolean', description: '用户明确问画面/动作/视觉细节时设为 true；普通问“讲了什么”不要开' }
++        },
++        required: ['url']
++      },
++      async execute(ctx, args) {
++        try {
++          const result = await inspectVideoLink(String(args.url ?? ''), ctx, {
++            mode: args.mode === 'deep' ? 'deep' : 'quick',
++            includeFrames: args.includeFrames === true,
++            signal: ctx.signal
++          });
++          const text = sanitizeUserText(String(result.text || ''));
++          const frames = Array.isArray(result.frameDataUrls) ? result.frameDataUrls : [];
++          if (frames.length) return { content: imageParts(text, frames) };
++          return ok(text);
++        } catch (error) {
++          return err(`视频链接读取失败：${sanitizeUserText(String(error?.message ?? error))}`);
++        }
++      }
++    },
+     {
+       name: 'finish',
+       description: '明确结束本次处理，并把下一次新会话需要的工作状态交接下去。summary 写本轮结论；话题还会继续时补充 topic/hypotheses/evidence/facts/decisions/rejectedDirections/openQuestions/nextStep。**私聊里要写细**（这是下一轮接着聊的底稿）：约定写清谁答应什么、什么时间，facts 至少 2~3 条具体事实，聊到哪儿停了、下次能自然接什么也写上；群里保持简洁。只写可检查的状态，不写逐步隐藏思维。话题已完成且旧交接不再有用时设 clearHandoff=true。不调用也可以，直接结束文本输出同样代表结束。',
+--- a/src/tools/video-link.js
++++ b/src/tools/video-link.js
+@@ -0,0 +1,739 @@
++// B 站视频链接读取：优先使用 B 站开放接口，避开服务器访问视频页时的 412 风控。
++// 本地模式只把字幕/音轨转成文本；深度模式可调用 BiliNote 在线 API。
++import crypto from 'node:crypto';
++import { spawn } from 'node:child_process';
++import fs from 'node:fs';
++import os from 'node:os';
++import path from 'node:path';
++import { DATA_DIR, getConfig } from '../core/config.js';
++import { sanitizeUserText } from '../core/util.js';
++import { safeFetch, safeFetchBinary } from '../llm/safe-fetch.js';
++import { transcribeAudioFile } from './audio-transcribe.js';
++import { convertVideoToFrameStrip } from './image-downsample.js';
++
++const BILI_HOSTS = new Set(['bilibili.com', 'www.bilibili.com', 'm.bilibili.com', 'b23.tv', 'www.b23.tv']);
++const YOUTUBE_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be']);
++const DOUYIN_HOSTS = new Set(['douyin.com', 'www.douyin.com', 'm.douyin.com', 'v.douyin.com', 'iesdouyin.com', 'www.iesdouyin.com']);
++const BILI_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
++  + '(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
++const BILI_HEADERS = {
++  'user-agent': BILI_USER_AGENT,
++  referer: 'https://www.bilibili.com/',
++  origin: 'https://www.bilibili.com'
++};
++const BILI_VIEW_API = 'https://api.bilibili.com/x/web-interface/view';
++const BILI_PLAYURL_API = 'https://api.bilibili.com/x/player/playurl';
++const BILI_PLAYER_API = 'https://api.bilibili.com/x/player/wbi/v2';
++const BILI_FINGER_API = 'https://api.bilibili.com/x/frontend/finger/spi';
++const BILI_NAV_API = 'https://api.bilibili.com/x/web-interface/nav';
++const MAX_TRANSCRIPT_CHARS = 40_000;
++const MAX_DESCRIPTION_CHARS = 1_200;
++const MAX_AUDIO_SECONDS = 300;
++const MAX_VISUAL_SECONDS = 360;
++const MAX_AUDIO_BYTES = 80 * 1024 * 1024;
++const MAX_VIDEO_BYTES = 96 * 1024 * 1024;
++const YTDLP_BIN = process.env.QQ_AGENT_YTDLP_BIN || '/mnt/data/qq-agent/bin/yt-dlp';
++const BILINOTE_KEY_FILE = process.env.QQ_AGENT_BILINOTE_API_KEY_FILE
++  || path.join(DATA_DIR, 'bilinote-api-key');
++const BILINOTE_API_BASE = String(process.env.QQ_AGENT_BILINOTE_API_BASE
++  || 'https://www.bilinote.net/api').replace(/\/+$/, '');
++const MIXIN_KEY_ENC_TAB = [
++  46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35,
++  27, 43, 5, 49, 33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13,
++  37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60, 51, 30, 4,
++  22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52
++];
++
++let activeJobs = 0;
++let cookieCache = null;
++let wbiCache = null;
++
++function timeoutSignal(signal, ms) {
++  const timeout = AbortSignal.timeout(ms);
++  return signal ? AbortSignal.any([signal, timeout]) : timeout;
++}
++
++function cleanLinkCandidate(value) {
++  return String(value || '').trim().replace(/[)\]}>，。！？、；;'"]+$/u, '');
++}
++
++export function videoPlatformOf(url) {
++  let host = '';
++  try { host = new URL(String(url)).hostname.toLowerCase(); } catch { return ''; }
++  if (BILI_HOSTS.has(host)) return 'BILIBILI';
++  if (YOUTUBE_HOSTS.has(host)) return 'YOUTUBE';
++  if (DOUYIN_HOSTS.has(host)) return 'DOUYIN';
++  return '';
++}
++
++export function normalizeVideoLink(input) {
++  const text = String(input || '').trim();
++  if (!text) throw new Error('缺少视频链接');
++  if (/https?:\/\/[^\s/]+@/i.test(text)) throw new Error('视频链接不能包含账号或密码');
++  const embedded = text.match(/(?:https?:\/\/)?(?:[\w-]+\.)*(?:bilibili\.com|b23\.tv|youtube\.com|youtu\.be|douyin\.com|iesdouyin\.com)\/[^\s<>"']+/i);
++  let raw = embedded ? cleanLinkCandidate(embedded[0]) : '';
++  if (raw && !/^https?:\/\//i.test(raw)) raw = `https://${raw}`;
++  if (!raw) {
++    const otherUrl = text.match(/https?:\/\/[^\s<>"']+/i);
++    if (otherUrl) throw new Error(`暂不支持这个视频平台：${new URL(otherUrl[0]).hostname}`);
++    const bv = text.match(/BV[0-9A-Za-z]{10}/i);
++    if (bv) return `https://www.bilibili.com/video/${bv[0]}`;
++    const av = text.match(/\bav(\d+)\b/i);
++    if (av) return `https://www.bilibili.com/video/av${av[1]}`;
++  }
++  if (!raw) throw new Error('没有识别到 B 站链接、BV 号或 av 号');
++  const url = new URL(raw);
++  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('视频链接只允许 http/https');
++  if (url.username || url.password) throw new Error('视频链接不能包含账号或密码');
++  if (!videoPlatformOf(url)) {
++    throw new Error(`暂不支持这个视频平台：${url.hostname}`);
++  }
++  return url.toString();
++}
++
++export function normalizeBilibiliLink(input) {
++  const normalized = normalizeVideoLink(input);
++  if (videoPlatformOf(normalized) !== 'BILIBILI') throw new Error('这个链接不是 B 站视频');
++  return normalized;
++}
++
++export function bilibiliPageNumber(url) {
++  try {
++    const n = Number(new URL(url).searchParams.get('p') || 1);
++    return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
++  } catch {
++    return 1;
++  }
++}
++
++export function formatSubtitleBody(payload, maxChars = MAX_TRANSCRIPT_CHARS) {
++  const rows = Array.isArray(payload?.body) ? payload.body : [];
++  const lines = [];
++  let chars = 0;
++  for (const row of rows) {
++    const text = String(row?.content || '').replace(/\s+/g, ' ').trim();
++    if (!text) continue;
++    const from = Math.max(0, Math.round(Number(row?.from) || 0));
++    const mm = String(Math.floor(from / 60)).padStart(2, '0');
++    const ss = String(from % 60).padStart(2, '0');
++    const line = `[${mm}:${ss}] ${text}`;
++    if (chars + line.length + 1 > maxChars) break;
++    lines.push(line);
++    chars += line.length + 1;
++  }
++  return lines.join('\n');
++}
++
++function timestampText(seconds) {
++  const safe = Math.max(0, Math.round(Number(seconds) || 0));
++  return `${String(Math.floor(safe / 60)).padStart(2, '0')}:${String(safe % 60).padStart(2, '0')}`;
++}
++
++export function parseWebVtt(text, maxChars = MAX_TRANSCRIPT_CHARS) {
++  const lines = [];
++  const seen = new Set();
++  let chars = 0;
++  for (const block of String(text || '').replace(/\r/g, '').split(/\n{2,}/)) {
++    const rows = block.split('\n').map((line) => line.trim()).filter(Boolean);
++    const timeIndex = rows.findIndex((line) => line.includes('-->'));
++    if (timeIndex < 0) continue;
++    const start = rows[timeIndex].split('-->')[0].trim().split(':').map(Number);
++    if (!start.length || start.some((n) => !Number.isFinite(n))) continue;
++    const seconds = start.length === 3
++      ? start[0] * 3600 + start[1] * 60 + start[2]
++      : start[0] * 60 + start[1];
++    const content = rows.slice(timeIndex + 1).join(' ')
++      .replace(/<[^>]+>/g, '')
++      .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
++      .replace(/\s+/g, ' ').trim();
++    if (!content || seen.has(content)) continue;
++    seen.add(content);
++    const line = `[${timestampText(seconds)}] ${content}`;
++    if (chars + line.length + 1 > maxChars) break;
++    lines.push(line);
++    chars += line.length + 1;
++  }
++  return lines.join('\n');
++}
++
++function runYtdlp(args, { signal, timeoutMs = 120_000 } = {}) {
++  if (!fs.existsSync(YTDLP_BIN)) return Promise.reject(new Error(`找不到 yt-dlp：${YTDLP_BIN}`));
++  return new Promise((resolve, reject) => {
++    const child = spawn(YTDLP_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
++    const stdout = [];
++    let stdoutBytes = 0;
++    let stderr = '';
++    let settled = false;
++    const finish = (error, result) => {
++      if (settled) return;
++      settled = true;
++      clearTimeout(timer);
++      signal?.removeEventListener('abort', onAbort);
++      if (error) reject(error);
++      else resolve(result);
++    };
++    const fail = (error) => {
++      try { child.kill('SIGKILL'); } catch { /* noop */ }
++      finish(error);
++    };
++    const onAbort = () => fail(signal?.reason || new Error('已中止'));
++    const timer = setTimeout(() => fail(new Error('视频下载或解析超时')), timeoutMs);
++    signal?.addEventListener('abort', onAbort, { once: true });
++    child.stdout.on('data', (chunk) => {
++      stdoutBytes += chunk.length;
++      if (stdoutBytes > 16 * 1024 * 1024) return fail(new Error('yt-dlp 输出过大'));
++      stdout.push(chunk);
++    });
++    child.stderr.on('data', (chunk) => {
++      stderr = (stderr + chunk.toString('utf8')).slice(-4000);
++    });
++    child.on('error', (error) => finish(new Error(`yt-dlp 无法启动：${error.message}`)));
++    child.on('close', (code) => {
++      if (settled) return;
++      const output = Buffer.concat(stdout).toString('utf8');
++      if (code !== 0) {
++        const detail = stderr.trim().split('\n').slice(-2).join('；').slice(-500);
++        return finish(new Error(`yt-dlp 失败（${code}）：${detail || '无错误输出'}`));
++      }
++      finish(null, { stdout: output, stderr });
++    });
++  });
++}
++
++function findDownloadedFile(dir, prefix) {
++  const names = fs.readdirSync(dir)
++    .filter((name) => name.startsWith(prefix) && !name.endsWith('.part') && !name.endsWith('.ytdl'))
++    .map((name) => path.join(dir, name))
++    .filter((file) => fs.statSync(file).isFile());
++  return names.sort((a, b) => fs.statSync(b).size - fs.statSync(a).size)[0] || '';
++}
++
++function captionLanguage(info) {
++  const keys = [...Object.keys(info?.subtitles || {}), ...Object.keys(info?.automatic_captions || {})];
++  const priority = ['zh-Hans', 'zh-CN', 'zh-Hant', 'zh-TW', 'zh', 'en'];
++  return priority.map((lang) => keys.find((key) => key === lang || key.startsWith(`${lang}-`))).find(Boolean) || '';
++}
++
++async function ytdlpSubtitles(url, info, workDir, signal) {
++  const language = captionLanguage(info);
++  if (!language || !/^[A-Za-z0-9_-]+$/.test(language)) return '';
++  await runYtdlp([
++    '--no-playlist', '--skip-download', '--write-subs', '--write-auto-subs',
++    '--sub-langs', language, '--sub-format', 'vtt/best',
++    '--socket-timeout', '20', '--retries', '1',
++    '-o', path.join(workDir, 'subtitle.%(ext)s'), url
++  ], { signal, timeoutMs: 60_000 });
++  const subtitle = findDownloadedFile(workDir, 'subtitle.');
++  return subtitle ? parseWebVtt(fs.readFileSync(subtitle, 'utf8')) : '';
++}
++
++function videoSummaryText({ title, uploader, duration, description, transcript, source, notes = [] }) {
++  const lines = [
++    `视频：${title || '未知标题'}`,
++    `UP主/作者：${uploader || '未知'}`,
++    `时长：${Math.round(Number(duration) || 0)} 秒`
++  ];
++  const desc = String(description || '').replace(/\s+/g, ' ').trim().slice(0, MAX_DESCRIPTION_CHARS);
++  if (desc) lines.push(`简介：${desc}`);
++  lines.push(transcript ? `内容来源：${source}` : '内容来源：未能取得字幕或音轨转写');
++  if (transcript) lines.push(transcript);
++  if (notes.length) lines.push(`注意：${notes.join('；')}`);
++  return lines.join('\n');
++}
++
++async function fetchJson(url, params, headers, signal, maxBytes = 1024 * 1024) {
++  const target = new URL(url);
++  for (const [key, value] of Object.entries(params || {})) {
++    if (value !== undefined && value !== null && value !== '') target.searchParams.set(key, String(value));
++  }
++  const response = await safeFetch(target.toString(), {
++    maxBytes,
++    signal: timeoutSignal(signal, 20_000),
++    headers
++  });
++  if (response.statusCode < 200 || response.statusCode >= 300) {
++    throw new Error(`B 站接口 HTTP ${response.statusCode}`);
++  }
++  try {
++    return JSON.parse(response.body);
++  } catch {
++    throw new Error('B 站接口返回了无法解析的数据');
++  }
++}
++
++function getWbiKey(navUrl) {
++  try {
++    return new URL(navUrl).pathname.split('/').pop().replace(/\.[^.]+$/, '');
++  } catch {
++    return '';
++  }
++}
++
++async function getWbiSigner(headers, signal) {
++  if (wbiCache && wbiCache.expiresAt > Date.now()) return wbiCache.mixin;
++  const nav = await fetchJson(BILI_NAV_API, {}, headers, signal, 256 * 1024);
++  const img = getWbiKey(nav?.data?.wbi_img?.img_url);
++  const sub = getWbiKey(nav?.data?.wbi_img?.sub_url);
++  if (!img || !sub) return '';
++  const raw = img + sub;
++  const mixin = MIXIN_KEY_ENC_TAB.map((index) => raw[index] || '').join('').slice(0, 32);
++  wbiCache = { mixin, expiresAt: Date.now() + 6 * 3600_000 };
++  return mixin;
++}
++
++function signWbiParams(params, mixin) {
++  const signed = { ...params, wts: Math.floor(Date.now() / 1000) };
++  const query = Object.keys(signed).sort()
++    .map((key) => `${encodeURIComponent(key)}=${encodeURIComponent(String(signed[key]))}`)
++    .join('&');
++  signed.w_rid = crypto.createHash('md5').update(query + mixin).digest('hex');
++  return signed;
++}
++
++async function bilibiliJson(url, params, headers, signal) {
++  let payload = await fetchJson(url, params, headers, signal);
++  if (Number(payload?.code) === 0) return payload;
++  try {
++    const mixin = await getWbiSigner(headers, signal);
++    if (mixin) {
++      payload = await fetchJson(url, signWbiParams(params, mixin), headers, signal);
++    }
++  } catch {
++    // 保留第一次的错误，签名失败只表示不能继续重试。
++  }
++  return payload;
++}
++
++async function bilibiliHeaders(signal) {
++  if (!cookieCache || cookieCache.expiresAt <= Date.now()) {
++    const spi = await fetchJson(BILI_FINGER_API, {}, BILI_HEADERS, signal, 64 * 1024);
++    if (Number(spi?.code) !== 0 || !spi?.data?.b_3) throw new Error('B 站匿名访问凭据获取失败');
++    cookieCache = {
++      value: `buvid3=${spi.data.b_3}; buvid4=${spi.data.b_4 || ''}; b_nut=${Math.floor(Date.now() / 1000)}`,
++      expiresAt: Date.now() + 3600_000
++    };
++  }
++  const extra = String(process.env.QQ_AGENT_BILIBILI_COOKIE || '').trim().replace(/[\r\n]/g, '');
++  return { ...BILI_HEADERS, cookie: extra ? `${cookieCache.value}; ${extra}` : cookieCache.value };
++}
++
++async function resolveShortLink(url, headers, signal) {
++  if (!/^(?:www\.)?b23\.tv$/i.test(new URL(url).hostname)) return url;
++  const response = await safeFetch(url, {
++    maxBytes: 32 * 1024,
++    signal: timeoutSignal(signal, 15_000),
++    headers
++  });
++  return response.url || url;
++}
++
++function bilibiliIds(url) {
++  const bv = url.match(/BV[0-9A-Za-z]{10}/i);
++  const av = url.match(/\bav(\d+)\b/i);
++  return { bvid: bv?.[0], aid: av ? Number(av[1]) : null };
++}
++
++async function fetchSubtitles(bvid, aid, cid, headers, signal) {
++  const payload = await bilibiliJson(
++    BILI_PLAYER_API,
++    bvid ? { bvid, cid } : { aid, cid },
++    headers,
++    signal
++  );
++  if (Number(payload?.code) !== 0) return { text: '', language: '', note: '' };
++  const tracks = payload?.data?.subtitle?.subtitles || [];
++  const priority = ['zh-Hans', 'zh-CN', 'ai-zh', 'zh-Hant', 'zh-TW', 'zh', 'en'];
++  const track = priority.map((lang) => tracks.find((item) => item?.lan === lang)).find(Boolean)
++    || tracks.find((item) => item?.subtitle_url);
++  if (!track?.subtitle_url) return { text: '', language: '', note: '' };
++  const subtitleUrl = String(track.subtitle_url).startsWith('//')
++    ? `https:${track.subtitle_url}`
++    : String(track.subtitle_url);
++  const response = await safeFetch(subtitleUrl, {
++    maxBytes: 2 * 1024 * 1024,
++    signal: timeoutSignal(signal, 20_000),
++    headers
++  });
++  if (response.statusCode < 200 || response.statusCode >= 300) throw new Error(`字幕下载 HTTP ${response.statusCode}`);
++  let subtitle;
++  try {
++    subtitle = JSON.parse(response.body);
++  } catch {
++    throw new Error('字幕数据无法解析');
++  }
++  return {
++    text: formatSubtitleBody(subtitle),
++    language: String(track.lan || ''),
++    note: ''
++  };
++}
++
++function pickStream(streams, { audio = false, maxHeight = 480 } = {}) {
++  const usable = (Array.isArray(streams) ? streams : []).filter((item) => item?.baseUrl || item?.base_url);
++  if (audio) return usable.sort((a, b) => Number(b.bandwidth || 0) - Number(a.bandwidth || 0))[0] || null;
++  const sorted = usable.sort((a, b) => Number(a.height || 0) - Number(b.height || 0));
++  return sorted.find((item) => Number(item.height || 0) >= 360 && Number(item.height || 0) <= maxHeight)
++    || sorted[0]
++    || null;
++}
++
++async function fetchPlayInfo({ url, bvid, aid, cid, headers, signal }) {
++  const payload = await bilibiliJson(
++    BILI_PLAYURL_API,
++    { ...(bvid ? { bvid } : { aid }), cid, fnval: 16, fnver: 0, fourk: 1 },
++    headers,
++    signal
++  );
++  if (Number(payload?.code) !== 0) {
++    throw new Error(`B 站播放信息不可用（code=${payload?.code ?? '?'} ${payload?.message || ''}）`);
++  }
++  const data = payload?.data || {};
++  const audio = pickStream(data?.dash?.audio, { audio: true });
++  const video = pickStream(data?.dash?.video);
++  return {
++    url,
++    audioUrl: String(audio?.baseUrl || audio?.base_url || data?.durl?.[0]?.url || ''),
++    videoUrl: String(video?.baseUrl || video?.base_url || data?.durl?.[0]?.url || '')
++  };
++}
++
++function subtitleText(title, page, data, transcript, source) {
++  const suffix = data?.pages?.length > 1 ? `（P${page?.page || 1} ${page?.part || ''}）` : '';
++  return videoSummaryText({
++    title: `${title}${suffix}`,
++    uploader: data?.owner?.name,
++    duration: page?.duration || data?.duration,
++    description: data?.desc,
++    transcript,
++    source
++  });
++}
++
++async function inspectWithYtdlp(url, ctx, { includeFrames = false, signal } = {}) {
++  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-video-link-'));
++  try {
++    const metaRun = await runYtdlp([
++      '--dump-single-json', '--no-playlist', '--skip-download', '--no-warnings',
++      '--socket-timeout', '20', '--retries', '1', url
++    ], { signal, timeoutMs: 25_000 });
++    let info;
++    try {
++      info = JSON.parse(metaRun.stdout);
++    } catch {
++      throw new Error('yt-dlp 返回的视频信息无法解析');
++    }
++    if (!info?.title) throw new Error('yt-dlp 没有返回视频标题');
++    if (info.is_live) throw new Error('直播视频暂不支持');
++    const duration = Number(info.duration || 0);
++    const notes = [];
++    let transcript = await ytdlpSubtitles(url, info, workDir, signal).catch((error) => {
++      notes.push(`字幕读取失败：${String(error?.message ?? error)}`);
++      return '';
++    });
++    let source = transcript ? '平台字幕' : '';
++
++    if (!transcript) {
++      if (duration > MAX_AUDIO_SECONDS) {
++        notes.push(`没有可直接读取的字幕，且视频超过 ${MAX_AUDIO_SECONDS / 60} 分钟，未自动下载音轨`);
++      } else {
++        await runYtdlp([
++          '--no-playlist', '--no-warnings', '--socket-timeout', '20', '--retries', '1',
++          '--max-filesize', '80M', '-f', 'bestaudio/best',
++          '-o', path.join(workDir, 'audio.%(ext)s'), url
++        ], { signal, timeoutMs: 120_000 });
++        const audioPath = findDownloadedFile(workDir, 'audio.');
++        if (!audioPath) throw new Error('yt-dlp 没有生成音频文件');
++        const asr = await transcribeAudioFile(ctx, audioPath, { name: path.basename(audioPath), signal });
++        if (asr.ok && asr.text) {
++          transcript = asr.text;
++          source = '视频音轨自动转写';
++          if (asr.caveat) notes.push(asr.caveat);
++        } else {
++          notes.push(asr.error || '视频音轨没有可转写内容');
++        }
++      }
++    }
++
++    const frameDataUrls = [];
++    if (includeFrames) {
++      if (duration > MAX_VISUAL_SECONDS) {
++        notes.push(`视频超过 ${MAX_VISUAL_SECONDS / 60} 分钟，未自动抽取画面`);
++      } else {
++        try {
++          await runYtdlp([
++            '--no-playlist', '--no-warnings', '--socket-timeout', '20', '--retries', '1',
++            '--max-filesize', '96M',
++            '-f', 'worstvideo[height>=360]/bestvideo[height<=480]/worst',
++            '-o', path.join(workDir, 'video.%(ext)s'), url
++          ], { signal, timeoutMs: 120_000 });
++          const videoPath = findDownloadedFile(workDir, 'video.');
++          if (!videoPath) throw new Error('yt-dlp 没有生成视频文件');
++          const strip = await convertVideoToFrameStrip(fs.readFileSync(videoPath), signal);
++          if (!strip?.length) throw new Error('视频抽帧失败');
++          frameDataUrls.push(`data:image/jpeg;base64,${strip.toString('base64')}`);
++          notes.push('画面来自视频按时间顺序抽取的 4 帧四宫格');
++        } catch (error) {
++          notes.push(`画面读取失败：${String(error?.message ?? error)}`);
++        }
++      }
++    }
++
++    return {
++      text: sanitizeUserText(videoSummaryText({
++        title: info.title,
++        uploader: info.uploader || info.channel || info.creator,
++        duration,
++        description: info.description,
++        transcript,
++        source,
++        notes
++      }).slice(0, MAX_TRANSCRIPT_CHARS + MAX_DESCRIPTION_CHARS + 2_000)),
++      frameDataUrls,
++      pending: false
++    };
++  } finally {
++    try { fs.rmSync(workDir, { recursive: true, force: true }); } catch { /* 清理失败不影响结果 */ }
++  }
++}
++
++function readBiliNoteKey() {
++  try {
++    const key = fs.readFileSync(BILINOTE_KEY_FILE, 'utf8').trim();
++    return key || '';
++  } catch {
++    return '';
++  }
++}
++
++export function biliNoteConfigured() {
++  return Boolean(readBiliNoteKey());
++}
++
++async function biliNoteApi(apiPath, { method = 'GET', body, signal } = {}) {
++  const key = readBiliNoteKey();
++  if (!key) throw new Error('未配置 BiliNote API Key');
++  const response = await fetch(`${BILINOTE_API_BASE}${apiPath}`, {
++    method,
++    headers: {
++      authorization: `Bearer ${key}`,
++      'content-type': 'application/json'
++    },
++    body: body === undefined ? undefined : JSON.stringify(body),
++    signal: timeoutSignal(signal, 30_000)
++  });
++  let payload;
++  try {
++    payload = await response.json();
++  } catch {
++    throw new Error(`BiliNote 返回无法解析（HTTP ${response.status}）`);
++  }
++  if (response.status === 401) throw new Error('BiliNote API Key 无效或已撤销');
++  if (payload?.code !== 200) throw new Error(payload?.message || `BiliNote API 错误 ${payload?.code ?? response.status}`);
++  return payload.data;
++}
++
++function modelRows(payload) {
++  if (Array.isArray(payload)) return payload;
++  return payload?.models || payload?.records || payload?.items || [];
++}
++
++function modelName(item) {
++  return String(item?.modelName || item?.model || item?.name || item?.id || '').trim();
++}
++
++function modelCost(item) {
++  const value = item?.costCredits ?? item?.credits ?? item?.creditCost ?? item?.cost ?? item?.baseCost;
++  const n = Number(value);
++  return Number.isFinite(n) ? n : Number.POSITIVE_INFINITY;
++}
++
++async function generateBiliNote(url, signal, platform = 'BILIBILI') {
++  const models = modelRows(await biliNoteApi('/v1/models', { signal }));
++  const eligible = models.filter((item) => item?.enabled !== 0 && item?.enabled !== false && item?.vipOnly !== true);
++  const candidates = eligible.length ? eligible : models;
++  const preferred = String(process.env.QQ_AGENT_BILINOTE_MODEL || '').trim();
++  const model = preferred
++    || modelName([...candidates].sort((a, b) => modelCost(a) - modelCost(b))[0]);
++  if (!model) throw new Error('BiliNote 没有返回可用模型');
++  const task = await biliNoteApi('/v1/notes/generate', {
++    method: 'POST',
++    signal,
++    body: {
++      videoUrl: url,
++      model,
++      platform,
++      screenshot: true
++    }
++  });
++  const taskId = String(task?.taskId || task?.task_id || '').trim();
++  if (!taskId) throw new Error('BiliNote 没有返回任务 ID');
++  const deadline = Date.now() + 120_000;
++  let delay = 3000;
++  while (Date.now() < deadline) {
++    signal?.throwIfAborted();
++    const status = await biliNoteApi(`/v1/tasks/${encodeURIComponent(taskId)}`, { signal });
++    if (String(status?.status || '').toUpperCase() === 'SUCCESS' && status?.noteId) {
++      const note = await biliNoteApi(`/v1/notes/${encodeURIComponent(status.noteId)}`, { signal });
++      return {
++        text: String(note?.content || '').slice(0, MAX_TRANSCRIPT_CHARS),
++        taskId,
++        pending: false
++      };
++    }
++    if (String(status?.status || '').toUpperCase() === 'FAILED') {
++      throw new Error(status?.errorMessage || 'BiliNote 生成失败');
++    }
++    await new Promise((resolve) => setTimeout(resolve, delay));
++    delay = Math.min(Math.round(delay * 1.5), 12_000);
++  }
++  return {
++    text: `BiliNote 仍在处理，任务 ID：${taskId}。稍后可以继续查询这个任务。`,
++    taskId,
++    pending: true
++  };
++}
++
++/**
++ * 读取一个 B 站视频链接。
++ * mode=quick：本地取字幕/音轨；mode=deep：有 BiliNote Key 时走在线精读。
++ */
++export async function inspectVideoLink(input, ctx, { mode = 'quick', includeFrames = false, signal = ctx?.signal } = {}) {
++  if (activeJobs >= 1) throw new Error('另一个视频链接正在处理中，请稍后再试');
++  activeJobs += 1;
++  let workDir = '';
++  try {
++    let normalized = normalizeVideoLink(input);
++    const platform = videoPlatformOf(normalized);
++    if (!platform) throw new Error('暂不支持这个视频平台');
++    if (mode === 'deep' && biliNoteConfigured()) {
++      const result = await generateBiliNote(normalized, signal, platform);
++      return {
++        text: sanitizeUserText(result.text),
++        frameDataUrls: [],
++        taskId: result.taskId,
++        pending: result.pending
++      };
++    }
++    if (platform !== 'BILIBILI') {
++      let result;
++      try {
++        result = await inspectWithYtdlp(normalized, ctx, { includeFrames, signal });
++      } catch (error) {
++        if (mode !== 'quick' || !biliNoteConfigured()) throw error;
++        result = await generateBiliNote(normalized, signal, platform);
++        result.text = `服务器本地直连失败，已回退 BiliNote 在线解析（消耗账户积分）。\n${result.text}`;
++      }
++      if (mode === 'deep') {
++        result.text += '\n注意：BiliNote 在线精读未配置 API Key，已回退 yt-dlp 本地模式';
++      }
++      return result;
++    }
++    const headers = await bilibiliHeaders(signal);
++    normalized = await resolveShortLink(normalized, headers, signal);
++    const { bvid, aid } = bilibiliIds(normalized);
++    if (!bvid && !aid) throw new Error('未能从链接中解析出 BV/av 号');
++
++    const deepFallback = mode === 'deep' && !biliNoteConfigured();
++
++    const view = await bilibiliJson(
++      BILI_VIEW_API,
++      bvid ? { bvid } : { aid },
++      headers,
++      signal
++    );
++    if (Number(view?.code) !== 0 || !view?.data?.title) {
++      throw new Error(`B 站视频信息不可用（code=${view?.code ?? '?'} ${view?.message || ''}）`);
++    }
++    const data = view.data;
++    const wantedPage = bilibiliPageNumber(normalized);
++    const page = (data.pages || []).find((item) => Number(item.page) === wantedPage) || data.pages?.[0] || {
++      page: 1,
++      cid: data.cid,
++      part: data.title,
++      duration: data.duration
++    };
++    const cid = Number(page?.cid || data.cid || 0);
++    if (!cid) throw new Error('B 站视频没有返回分 P 信息');
++    const duration = Number(page?.duration || data.duration || 0);
++
++    const subtitle = await fetchSubtitles(bvid, aid, cid, headers, signal).catch((error) => ({
++      text: '',
++      language: '',
++      note: String(error?.message ?? error)
++    }));
++    let transcript = subtitle.text;
++    let transcriptSource = subtitle.text ? `B站字幕 ${subtitle.language || ''}`.trim() : '';
++    const notes = [];
++    if (deepFallback) notes.push('BiliNote 在线精读未配置 API Key，已回退本地模式');
++    if (subtitle.note) notes.push(`字幕读取失败：${subtitle.note}`);
++
++    if (!transcript) {
++      if (duration > MAX_AUDIO_SECONDS) {
++        notes.push(`没有可直接读取的字幕，且视频超过 ${MAX_AUDIO_SECONDS / 60} 分钟，未自动下载音轨`);
++      } else {
++        const play = await fetchPlayInfo({ url: normalized, bvid, aid, cid, headers, signal });
++        if (!play.audioUrl) throw new Error('B 站没有返回可下载音轨');
++        workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-video-link-'));
++        const audioPath = path.join(workDir, 'audio.m4s');
++        const media = await safeFetchBinary(
++          play.audioUrl,
++          MAX_AUDIO_BYTES,
++          signal,
++          { headers: { referer: BILI_HEADERS.referer, 'user-agent': BILI_USER_AGENT } }
++        );
++        fs.writeFileSync(audioPath, media.buffer, { mode: 0o600 });
++        const asr = await transcribeAudioFile(ctx, audioPath, { name: 'audio.m4s', signal });
++        if (asr.ok && asr.text) {
++          transcript = asr.text;
++          transcriptSource = '视频音轨自动转写';
++          if (asr.caveat) notes.push(asr.caveat);
++        } else {
++          notes.push(asr.error || '视频音轨没有可转写内容');
++        }
++      }
++    }
++
++    const frameDataUrls = [];
++    if (includeFrames) {
++      if (duration > MAX_VISUAL_SECONDS) {
++        notes.push(`视频超过 ${MAX_VISUAL_SECONDS / 60} 分钟，未自动抽取画面`);
++      } else {
++        try {
++          const play = await fetchPlayInfo({ url: normalized, bvid, aid, cid, headers, signal });
++          if (!play.videoUrl) throw new Error('B 站没有返回可下载视频画面');
++          const video = await safeFetchBinary(
++            play.videoUrl,
++            MAX_VIDEO_BYTES,
++            signal,
++            { headers: { referer: BILI_HEADERS.referer, 'user-agent': BILI_USER_AGENT } }
++          );
++          const strip = await convertVideoToFrameStrip(video.buffer, signal);
++          if (!strip?.length) throw new Error('视频抽帧失败');
++          frameDataUrls.push(`data:image/jpeg;base64,${strip.toString('base64')}`);
++          notes.push('画面来自视频按时间顺序抽取的 4 帧四宫格');
++        } catch (error) {
++          notes.push(`画面读取失败：${String(error?.message ?? error)}`);
++        }
++      }
++    }
++
++    let text = subtitleText(
++      `${data.title}${data.pages?.length > 1 ? `（P${page?.page || 1} ${page?.part || ''}）` : ''}`,
++      page,
++      data,
++      transcript,
++      transcriptSource
++    );
++    if (notes.length) text += `\n注意：${notes.join('；')}`;
++    return {
++      text: sanitizeUserText(text.slice(0, MAX_TRANSCRIPT_CHARS + MAX_DESCRIPTION_CHARS + 2_000)),
++      frameDataUrls,
++      pending: false
++    };
++  } finally {
++    activeJobs = Math.max(0, activeJobs - 1);
++    if (workDir) {
++      try { fs.rmSync(workDir, { recursive: true, force: true }); } catch { /* 清理失败不影响结果 */ }
++    }
++  }
++}
+--- a/test/video-link.test.mjs
++++ b/test/video-link.test.mjs
+@@ -0,0 +1,74 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import {
++  bilibiliPageNumber,
++  formatSubtitleBody,
++  normalizeBilibiliLink,
++  normalizeVideoLink,
++  parseWebVtt,
++  videoPlatformOf
++} from '../src/tools/video-link.js';
++import { buildToolDefs } from '../src/tools/tools-core.js';
++
++test('B站视频链接：正式链接、短链、分享文本和裸视频号都能归一化', () => {
++  assert.equal(
++    normalizeBilibiliLink('https://www.bilibili.com/video/BV1Qwby6DEu1?p=2'),
++    'https://www.bilibili.com/video/BV1Qwby6DEu1?p=2'
++  );
++  assert.equal(
++    normalizeBilibiliLink('看看这个 https://b23.tv/abc123 很好笑'),
++    'https://b23.tv/abc123'
++  );
++  assert.equal(
++    normalizeBilibiliLink('BV1Qwby6DEu1'),
++    'https://www.bilibili.com/video/BV1Qwby6DEu1'
++  );
++  assert.equal(
++    normalizeBilibiliLink('av12345'),
++    'https://www.bilibili.com/video/av12345'
++  );
++});
++
++test('B站视频链接：拒绝非 B 站域名和带凭据的地址', () => {
++  assert.throws(() => normalizeBilibiliLink('https://example.com/video/BV1Qwby6DEu1'), /暂不支持|不是 B 站/);
++  assert.throws(() => normalizeBilibiliLink('https://user:pass@www.bilibili.com/video/BV1Qwby6DEu1'), /不能包含账号或密码/);
++});
++
++test('YouTube 和抖音链接进入支持白名单，其他平台仍拒绝', () => {
++  assert.equal(videoPlatformOf(normalizeVideoLink('https://youtu.be/jNQXAC9IVRw')), 'YOUTUBE');
++  assert.equal(videoPlatformOf(normalizeVideoLink('https://www.douyin.com/video/1234567890')), 'DOUYIN');
++  assert.throws(() => normalizeVideoLink('https://example.com/video/123'), /暂不支持/);
++});
++
++test('B站分 P 页码只接受正整数', () => {
++  assert.equal(bilibiliPageNumber('https://www.bilibili.com/video/BV1Qwby6DEu1?p=3'), 3);
++  assert.equal(bilibiliPageNumber('https://www.bilibili.com/video/BV1Qwby6DEu1?p=0'), 1);
++  assert.equal(bilibiliPageNumber('not-a-url'), 1);
++});
++
++test('B站字幕 JSON 转成带时间戳的纯文本，并遵守字符上限', () => {
++  const text = formatSubtitleBody({
++    body: [
++      { from: 1.2, to: 3, content: '第一句' },
++      { from: 65, to: 70, content: '第二句' }
++    ]
++  });
++  assert.equal(text, '[00:01] 第一句\n[01:05] 第二句');
++  assert.equal(formatSubtitleBody({ body: [{ from: 0, content: '一二三四五' }] }, 8), '');
++});
++
++test('WebVTT 字幕去掉标签、去重并保留时间戳', () => {
++  const text = parseWebVtt('WEBVTT\n\n00:01.000 --> 00:02.000\n<b>你好</b>\n\n00:01.000 --> 00:02.000\n你好\n\n00:65.000 --> 00:70.000\n下一句');
++  assert.equal(text, '[00:01] 你好\n[01:05] 下一句');
++});
++
++test('工具表暴露 inspect_video_link，且普通模式默认不抽帧', () => {
++  const tool = buildToolDefs().find((item) => item.name === 'inspect_video_link');
++  assert.ok(tool, 'inspect_video_link 必须可用');
++  assert.deepEqual(tool.parameters.required, ['url']);
++  assert.equal(tool.parameters.properties.includeFrames.type, 'boolean');
++  assert.match(tool.description, /默认 mode=quick/);
++  assert.match(tool.description, /includeFrames/);
++  assert.match(tool.description, /YouTube/);
++  assert.match(tool.description, /抖音/);
++});

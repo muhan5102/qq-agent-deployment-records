@@ -1,0 +1,263 @@
+diff --git a/src/core/orchestrator.js b/src/core/orchestrator.js
+index 615cc08..f75a2fb 100644
+--- a/src/core/orchestrator.js
++++ b/src/core/orchestrator.js
+@@ -124,7 +124,7 @@ import { sceneControlOf } from './scene-control.js';
+ import { chatCompletion, chatCompletionWithRetry, addUsage, emptyUsage, isRetryableError } from '../llm/llm.js';
+ import { buildToolDefs, toOpenAiTools, executeTool, platformToolAllowed } from '../tools/tools.js';
+ import { normalizeMid, downloadImageAsDataUrl } from '../tools/tools-core.js';
+-import { applyDeepVideoIntent } from '../tools/video-link.js';
++import { applyDeepVideoIntent, findRecentVideoLink, hasDeepVideoIntent } from '../tools/video-link.js';
+ import { visionEnabled } from '../llm/vision-scan.js';
+ import { resolvePersona } from '../personas.js';
+ import { currentProviders } from './providers.js';
+@@ -2320,6 +2320,45 @@ export class Orchestrator {
+       this.sessions.update(session.id);
+       this.emit('session-update', session.id);
+     };
++    const recentHumanMessages = (priorProviderMessages || [])
++      .filter((item) => item?.role === 'user')
++      .slice(-6);
++    const deepVideoUrl = hasDeepVideoIntent(ctx.triggerEntries)
++      ? findRecentVideoLink([...recentHumanMessages, ...ctx.triggerEntries])
++      : '';
++    if (deepVideoUrl) {
++      markActivity('正在用 BiliNote 整理视频笔记…');
++      const videoArgs = { url: deepVideoUrl, mode: 'deep' };
++      const result = await executeTool(toolDefs, ctx, 'inspect_video_link', JSON.stringify(videoArgs));
++      let contentStr = '';
++      if (Array.isArray(result.content)) {
++        contentStr = result.content.filter((part) => part?.type === 'text').map((part) => part.text).join('\n');
++      } else {
++        contentStr = String(result.content || '');
++      }
++      contentStr = safeSlice(contentStr, 40_000);
++      session.messages.push({
++        toolCall: {
++          name: 'inspect_video_link',
++          args: result.parsedArgs ?? videoArgs,
++          result: contentStr,
++          isError: !!result.isError
++        }
++      });
++      messages.push({
++        role: 'user',
++        content: (result.isError
++          ? '[系统：本轮用户明确要求详细看最近分享的视频，但 BiliNote 调用失败。'
++            + '不要假装已经看过或编造视频内容；可以简要说明没读到，并保留用户要求，稍后重试。]\n\n'
++          : '[系统：本轮用户明确要求详细看最近分享的视频。系统已用 BiliNote 整理下列笔记，'
++            + '不要再重复调用 inspect_video_link。请结合用户本轮的具体要求（例如计算、比较、结合刚才说的经历）'
++            + '组织自然回复；不要逐段复述笔记。]\n\n')
++          + contentStr
++      });
++      this.sessions.update(session.id);
++      markActivity('');
++      log.info(`[video] 详细视频意图已绑定最近链接并调用 BiliNote（${chatKey}）`);
++    }
+     for (let round = 0; round < maxRounds && !finish; round++) {
+       signal.throwIfAborted();
+       if (this.aborted || !canRun(chatKey)) throw new Error('Run cancelled');
+@@ -2506,7 +2545,7 @@ export class Orchestrator {
+         if (name === 'inspect_video_link') {
+           try {
+             const parsedArgs = typeof argsRaw === 'object' ? argsRaw : JSON.parse(String(argsRaw));
+-            const forced = applyDeepVideoIntent(parsedArgs, ctx.triggerEntries);
++            const forced = applyDeepVideoIntent(parsedArgs, ctx.triggerEntries, recentHumanMessages);
+             if (forced !== parsedArgs) argsRaw = JSON.stringify(forced);
+           } catch {
+             // 非法参数交回原工具处理，不在调度层吞掉错误。
+diff --git a/src/onebot/onebot.js b/src/onebot/onebot.js
+index 6a83ec7..04e7fd1 100644
+--- a/src/onebot/onebot.js
++++ b/src/onebot/onebot.js
+@@ -755,6 +755,28 @@ export function cardToText(seg, selfId = '') {
+   const source = String(raw || '').trim();
+   if (!source) return '[卡片消息]';
+   const squash = (v) => String(v ?? '').replace(/\s+/g, ' ').trim();
++  const videoUrlPattern = /(?:https?:\/\/)?(?:[\w-]+\.)*(?:bilibili\.com|b23\.tv|youtube\.com|youtu\.be|douyin\.com|iesdouyin\.com)\/[^\s<>"']+/i;
++  const findVideoUrl = (value, depth = 0) => {
++    if (depth > 8 || value == null) return '';
++    if (typeof value === 'string') {
++      const hit = value.match(videoUrlPattern);
++      return hit ? squash(hit[0].replace(/&amp;/g, '&')) : '';
++    }
++    if (Array.isArray(value)) {
++      for (const item of value) {
++        const found = findVideoUrl(item, depth + 1);
++        if (found) return found;
++      }
++      return '';
++    }
++    if (typeof value === 'object') {
++      for (const item of Object.values(value)) {
++        const found = findVideoUrl(item, depth + 1);
++        if (found) return found;
++      }
++    }
++    return '';
++  };
+   const pickXml = (re) => {
+     const m = re.exec(source);
+     if (!m) return '';
+@@ -766,6 +788,7 @@ export function cardToText(seg, selfId = '') {
+   let prompt = '';
+   let nick = '';
+   let uin = '';
++  let videoUrl = '';
+   if (source.startsWith('{')) {
+     try {
+       const obj = JSON.parse(source);
+@@ -776,6 +799,7 @@ export function cardToText(seg, selfId = '') {
+       prompt = squash(obj.prompt);
+       nick = squash(detail.host?.nick);
+       uin = squash(detail.host?.uin);
++      videoUrl = findVideoUrl(obj);
+     } catch { /* 不是合法 JSON：交给下面的 XML 分支兜底 */ }
+   }
+   if (!title && !desc) {
+@@ -785,8 +809,12 @@ export function cardToText(seg, selfId = '') {
+     const src = pickXml(/<source[^>]*name="([^"]*)"/i);
+     if (src && !prompt) prompt = src;
+   }
++  if (!videoUrl) {
++    const hit = source.match(videoUrlPattern);
++    if (hit) videoUrl = squash(hit[0].replace(/&amp;/g, '&'));
++  }
+ 
+-  const body = [title, desc].filter(Boolean).join(' — ');
++  const body = [title, desc, videoUrl].filter(Boolean).join(' — ');
+   const mine = selfId && uin && String(uin) === String(selfId);
+   const tags = [prompt, mine ? '你自己的动态' : (nick ? `来自 ${nick}` : '')].filter(Boolean).join(' · ');
+   // 聊天记录卡片（app=com.tencent.multimsg，资源 id 在 detail_1.resid）单独标成「卡片聊天记录」：
+diff --git a/src/tools/video-link.js b/src/tools/video-link.js
+index c7e2ded..e100aeb 100644
+--- a/src/tools/video-link.js
++++ b/src/tools/video-link.js
+@@ -57,8 +57,9 @@ function cleanLinkCandidate(value) {
+   return String(value || '').trim().replace(/[)\]}>，。！？、；;'"]+$/u, '');
+ }
+ 
+-const DEEP_VIDEO_INTENT = /(?:详细分析|完整分析|认真看完整|认真看完|完整看一遍|做详细笔记|做成详细笔记|完整笔记)/;
+-const DEEP_VIDEO_NEGATION = /(?:不要|不用|无需|不必|别)(?:再)?(?:详细分析|完整分析|认真看|做详细笔记|做成详细笔记)/;
++const DEEP_VIDEO_INTENT = /(?:详细(?:看看|看下|看一下|看一看|看|分析|讲解|解读|整理|说说|讲讲)|认真(?:看看|看下|看一下|看|看完|分析|研究)|仔细(?:看看|看下|看一下|看|分析)|好好(?:看看|看一下|看看|看|分析)|完整(?:看看|看下|看一下|看|看一遍|分析|讲解|整理)|(?:看|看看|看一下)(?:完整|整个|全部)(?:视频)?|(?:重新|再)(?:看一遍|看看|看)|从头(?:看|看一遍|看到尾)|做(?:成|出)?(?:详细)?笔记|(?:整理|生成|总结)(?:成|出|一份)?(?:视频)?(?:详细|完整)?笔记)/;
++const DEEP_VIDEO_NEGATION = /(?:不要|不用|无需|不必|别)(?:再)?(?:详细(?:看看|看|分析)|认真(?:看看|看)|仔细(?:看看|看)|完整(?:看|分析)|做(?:详细)?笔记|整理笔记)/;
++const VIDEO_URL_IN_TEXT = /(?:https?:\/\/)?(?:[\w-]+\.)*(?:bilibili\.com|b23\.tv|youtube\.com|youtu\.be|douyin\.com|iesdouyin\.com)\/[^\s<>"']+/i;
+ 
+ /** 只检查本轮触发消息，决定是否强制视频工具进入 deep 模式。 */
+ export function hasDeepVideoIntent(triggerEntries) {
+@@ -69,9 +70,35 @@ export function hasDeepVideoIntent(triggerEntries) {
+   });
+ }
+ 
+-export function applyDeepVideoIntent(args, triggerEntries) {
++function messageText(value) {
++  if (typeof value === 'string') return value;
++  if (!value || typeof value !== 'object' || (value.role && value.role !== 'user')) return '';
++  if (typeof value.text === 'string') return value.text;
++  if (typeof value.content === 'string') return value.content;
++  if (!Array.isArray(value.content)) return '';
++  return value.content
++    .filter((part) => part?.type === 'text')
++    .map((part) => String(part.text || ''))
++    .join('\n');
++}
++
++/** 从最近的人类消息里找视频链接，供“详细看看/算一下”这种不带链接的追问绑定上一条视频。 */
++export function findRecentVideoLink(messages) {
++  const texts = (Array.isArray(messages) ? messages : [messages])
++    .map(messageText)
++    .filter(Boolean);
++  for (let i = texts.length - 1; i >= 0; i--) {
++    const hit = texts[i].match(VIDEO_URL_IN_TEXT);
++    if (!hit) continue;
++    try { return normalizeVideoLink(hit[0]); } catch { /* 继续找更早的消息 */ }
++  }
++  return '';
++}
++
++export function applyDeepVideoIntent(args, triggerEntries, recentMessages = []) {
+   if (!args || typeof args !== 'object' || Array.isArray(args) || !hasDeepVideoIntent(triggerEntries)) return args;
+-  return { ...args, mode: 'deep' };
++  const url = String(args.url || '').trim() || findRecentVideoLink(recentMessages);
++  return { ...args, ...(url ? { url } : {}), mode: 'deep' };
+ }
+ 
+ export function videoPlatformOf(url) {
+diff --git a/test/forward-reader.test.mjs b/test/forward-reader.test.mjs
+index d0e99a3..fa613ef 100644
+--- a/test/forward-reader.test.mjs
++++ b/test/forward-reader.test.mjs
+@@ -183,6 +183,22 @@ test('聊天记录卡片单独标成 [卡片聊天记录 …]：提示词里的锚点必须真的出现在正文里', async () => {
+   assert.equal(cardToText({ type: 'json', data: {} }), '[卡片消息]');
+ });
+ 
++test('B 站小程序卡片把视频 URL 一并交给模型', async () => {
++  const { cardToText } = await import('../src/onebot/onebot.js');
++  const bili = JSON.stringify({
++    app: 'com.tencent.miniapp_01',
++    prompt: '[QQ小程序]',
++    meta: {
++      detail_1: {
++        title: '测试视频',
++        desc: '哔哩哔哩',
++        url: 'https://b23.tv/AbCdEf1'
++      }
++    }
++  });
++  assert.match(cardToText({ type: 'json', data: { data: bili } }), /https:\/\/b23\.tv\/AbCdEf1/);
++});
++
+ // 「消息类型」关掉自动展开后（issue #34），**按需展开这条路必须还在** ——
+ // 关的是"入站顺手展开"，不是"模型想看时看不到"。哪天有人把同一个闸门也加到工具上，
+ // 这条用例会红。
+diff --git a/test/video-link.test.mjs b/test/video-link.test.mjs
+index 8bec00f..5fcba60 100644
+--- a/test/video-link.test.mjs
++++ b/test/video-link.test.mjs
+@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
+ import {
+   applyDeepVideoIntent,
+   bilibiliPageNumber,
++  findRecentVideoLink,
+   formatSubtitleBody,
+   hasDeepVideoIntent,
+   normalizeBilibiliLink,
+@@ -42,11 +43,12 @@ test('YouTube 和抖音链接进入支持白名单，其他平台仍拒绝', () => {
+   assert.throws(() => normalizeVideoLink('https://example.com/video/123'), /暂不支持/);
+ });
+ 
+-test('“详细分析/完整笔记/认真看完”强制 deep，普通看看和否定句不强制', () => {
++test('“详细看看/完整笔记/认真看完”强制 deep，普通看看和否定句不强制', () => {
+   const deepPhrases = [
+     '帮我详细分析这个视频',
+     '认真看完以后做成完整笔记',
+-    '请完整分析一下'
++    '请完整分析一下',
++    '你详细看看，算一下'
+   ];
+   for (const text of deepPhrases) {
+     assert.equal(hasDeepVideoIntent([{ text, self: false }]), true);
+@@ -57,6 +59,23 @@ test('“详细分析/完整笔记/认真看完”强制 deep，普通看看和否定句不强制', () => {
+   assert.equal(hasDeepVideoIntent([{ text: '帮我详细分析这个视频', self: true }]), false);
+ });
+ 
++test('无链接的详细追问能绑定最近一条视频', () => {
++  const recent = [
++    { role: 'assistant', content: '上一条回答' },
++    { role: 'user', content: '【视频】 https://b23.tv/AbCdEf1' },
++    { role: 'user', content: '你详细看看，算一下' }
++  ];
++  assert.equal(findRecentVideoLink(recent), 'https://b23.tv/AbCdEf1');
++  assert.equal(
++    applyDeepVideoIntent({}, [{ text: '详细看看' }], recent).url,
++    'https://b23.tv/AbCdEf1'
++  );
++  assert.equal(
++    applyDeepVideoIntent({}, [{ text: '你详细看看，算一下' }], recent).mode,
++    'deep'
++  );
++});
++
+ test('B站分 P 页码只接受正整数', () => {
+   assert.equal(bilibiliPageNumber('https://www.bilibili.com/video/BV1Qwby6DEu1?p=3'), 3);
+   assert.equal(bilibiliPageNumber('https://www.bilibili.com/video/BV1Qwby6DEu1?p=0'), 1);

@@ -1,0 +1,361 @@
+diff --git a/src/console/app.js b/src/console/app.js
+index 9abcab7..e285d71 100644
+--- a/src/console/app.js
++++ b/src/console/app.js
+@@ -4505,6 +4505,10 @@ export function createApp({
+     const enabled = getConfig().reminders?.enabled !== false;
+     const fmt = (it) => ({
+       id: it.id, chatKey: it.chatKey, text: it.text, status: it.status || 'pending',
++      repeat: it.repeat === 'daily' ? 'daily' : 'once',
++      ...(it.dailyAt ? { dailyAt: it.dailyAt } : {}),
++      ...(it.lastFiredAt ? { lastFiredAt: it.lastFiredAt } : {}),
++      ...(Number(it.firedCount) > 0 ? { firedCount: Number(it.firedCount) } : {}),
+       at: it.at, createdAt: it.createdAt, finishedAt: it.finishedAt || null,
+       // 归属（谁提的/提醒谁）：控制台列表要显示"谁请你提醒谁"（2026-10-10 反馈）
+       from: String(it.createdBy || ''), to: String(it.targetName || '')
+diff --git a/src/core/reminders.js b/src/core/reminders.js
+index c7a9040..47efe60 100644
+--- a/src/core/reminders.js
++++ b/src/core/reminders.js
+@@ -91,12 +91,30 @@ export class ReminderStore {
+    *  createdBy = 谁提的（"a 让你提醒 b"里的 a）；targetName = 提醒谁（b）。
+    *  两者都是可选的事实信息，只用于到点派发时的话术归属（2026-10-10 用户反馈：
+    *  此前不记归属，派发话术又套着"你给自己留过话"的框架，模型会自己圆归属）。 */
+-  add({ chatKey, at, text, createdBy = '', targetName = '' }) {
+-    const when = Number(at);
++  add({ chatKey, at, text, createdBy = '', targetName = '', repeat = '', dailyAt = '' }) {
++    const repeatMode = String(repeat || '').trim() === 'daily' ? 'daily' : '';
++    const dailyText = String(dailyAt || '').trim();
++    const dailyMatch = /^(\d{1,2})[:：](\d{2})$/.exec(dailyText);
++    if (repeatMode === 'daily' && !dailyMatch) throw new Error('每日提醒需要 HH:MM');
++    const canonicalDaily = repeatMode === 'daily'
++      ? `${String(Number(dailyMatch[1])).padStart(2, '0')}:${dailyMatch[2]}`
++      : '';
+     // 提醒正文是"用户可诱导模型原样搬运"的文本，落盘前统一弱化段头（提示注入面，2026-09-28 审查 P2）
+     const body = sanitizeUserText(String(text || '').trim()).slice(0, MAX_REMINDER_TEXT);
+     if (!chatKey) throw new Error('缺少会话');
+     if (!body) throw new Error('提醒内容不能为空');
++    if (repeatMode === 'daily') {
++      const duplicate = this.items.find((it) =>
++        it.status === 'pending'
++        && it.chatKey === chatKey
++        && it.repeat === 'daily'
++        && it.dailyAt === canonicalDaily
++        && String(it.text || '') === body);
++      if (duplicate) return { id: duplicate.id, at: duplicate.at, dailyAt: duplicate.dailyAt || canonicalDaily, existing: true };
++    }
++    const when = repeatMode === 'daily'
++      ? nextAtFromHHMM(canonicalDaily)
++      : Number(at);
+     if (!Number.isFinite(when)) throw new Error('提醒时间不合法');
+     const now = Date.now();
+     if (when <= now + 5000) throw new Error('提醒时间必须晚于现在');
+@@ -122,6 +140,7 @@ export class ReminderStore {
+       // 归属名与其他入口同口径（段头弱化 + 截断）：它们会进派发 note，也在注入面里
+       createdBy: sanitizeUserText(String(createdBy || '').trim()).slice(0, 40),
+       targetName: sanitizeUserText(String(targetName || '').trim()).slice(0, 40),
++      ...(repeatMode === 'daily' ? { repeat: 'daily', dailyAt: canonicalDaily } : {}),
+       status: 'pending',
+       createdAt: now,
+       // originalAt 是承诺时间，deferTo 外因顺延会更新；投递重试不会。
+@@ -132,7 +151,7 @@ export class ReminderStore {
+     };
+     this.items.push(item);
+     this.#save();
+-    return { id: item.id, at: item.at };
++    return { id: item.id, at: item.at, dailyAt: item.dailyAt || '', existing: false };
+   }
+ 
+   cancel({ id = '', chatKey = '' }) {
+@@ -158,6 +177,18 @@ export class ReminderStore {
+   }
+ 
+   due(now = Date.now()) {
++    let changed = false;
++    for (const it of this.items) {
++      if (it.status !== 'pending' || it.repeat !== 'daily' || !it.dailyAt) continue;
++      if ((Number(it.at) || 0) > now - EXPIRE_AFTER_MS) continue;
++      // 关机/断线跨过多个周期时不补发历史批次，直接跳到最近的下一次。
++      it.at = nextAtFromHHMM(it.dailyAt, now);
++      it.originalAt = it.at;
++      it.deliveryAttempts = 0;
++      it.skippedAt = now;
++      changed = true;
++    }
++    if (changed) this.#save();
+     return this.items.filter((it) => it.status === 'pending' && it.at <= now);
+   }
+ 
+@@ -167,6 +198,7 @@ export class ReminderStore {
+   expired(now = Date.now()) {
+     return this.items.filter((it) => {
+       if (it.status !== 'pending') return false;
++      if (it.repeat === 'daily' && it.dailyAt) return false;
+       const at = Number(it.at) || 0;
+       const originalAt = Number(it.originalAt) || at;
+       // 取更早的那个：投递重试只把 at 推后（仍按原承诺作废）；
+@@ -183,7 +215,10 @@ export class ReminderStore {
+   deferTo(id, at) {
+     const hit = this.items.find((x) => x.id === id && x.status === 'pending');
+     if (!hit) return null;
+-    hit.at = Number(at) || hit.at;
++    const proposed = Number(at) || hit.at;
++    hit.at = hit.repeat === 'daily' && hit.dailyAt
++      ? nextAtFromHHMM(hit.dailyAt, proposed)
++      : proposed;
+     // 预算/静默段属于"外因顺延"：承诺时间确实改到新窗口，作废时钟跟着新 at 起算。
+     hit.originalAt = hit.at;
+     // 外因顺延之间没有尝试过，不能把"连续未确认播报"的计数接着累计。
+@@ -226,6 +261,18 @@ export class ReminderStore {
+   markFired(id, now = Date.now()) {
+     const it = this.items.find((x) => x.id === id);
+     if (!it) return null;
++    if (it.repeat === 'daily' && it.dailyAt) {
++      const next = nextAtFromHHMM(it.dailyAt, Math.max(now, Number(it.at) || now));
++      it.at = next;
++      it.originalAt = next;
++      it.firedAt = now;
++      it.lastFiredAt = now;
++      it.firedCount = (Number(it.firedCount) || 0) + 1;
++      it.deliveryAttempts = 0;
++      it.finishedAt = null;
++      this.#save();
++      return it;
++    }
+     it.status = 'fired';
+     it.firedAt = now;
+     it.finishedAt = now;
+diff --git a/src/tools/tools-core.js b/src/tools/tools-core.js
+index c02b3a6..2e5fe34 100644
+--- a/src/tools/tools-core.js
++++ b/src/tools/tools-core.js
+@@ -1898,12 +1898,13 @@ export function buildToolDefs() {
+     },
+     {
+       name: 'remind',
+-      description: '给当前会话设一个定时提醒（到点你会被唤醒，用你的口吻把这件事说出来）；也可查询/取消。minutes 或 HH:MM 二选一，HH:MM 按北京时间、已过则算明天。这是给别人设的提醒（重启后依然有效），与给自己排开口时机的 schedule_wake 不同。'
++      description: '给当前会话设一个定时提醒（到点你会被唤醒，用你的口吻把这件事说出来）；也可查询/取消。minutes 或 HH:MM 二选一，HH:MM 按北京时间、已过则算明天。repeat=daily 时用 at 指定固定每日时刻，例如每天 07:00。这是给别人设的提醒（重启后依然有效），与给自己排开口时机的 schedule_wake 不同。'
+         + '是「A 让你提醒 B」时（如"12 点提醒他吃饭"），把 to 填成被提醒的人、from 填成提要求的人 —— 到点你才能说清是谁请你提醒谁，别让被提醒的人以为是自己设的。from 要能在最近这轮消息里对上人（填他的群名片/备注名或 QQ 号；对不上就不会记录）。',
+       parameters: {
+         type: 'object',
+         properties: {
+           action: { type: 'string', enum: ['add', 'list', 'cancel'], description: 'add=新增；list=查看本会话待触发；cancel=取消（不传 id 取消最近一条）' },
++          repeat: { type: 'string', enum: ['once', 'daily'], description: 'add 用：once=一次性（默认）；daily=每天固定时刻循环' },
+           minutes: { type: 'number', description: 'add 用：多少分钟后（1~43200）' },
+           at: { type: 'string', description: 'add 用：绝对时间 HH:MM（北京时间，已过则算明天）' },
+           text: { type: 'string', description: 'add 用：提醒内容（必填，≤200 字）' },
+@@ -1929,6 +1930,8 @@ export function buildToolDefs() {
+             pending: items.length,
+             reminders: items.map((it) => ({
+               id: it.id, at: fmt(it.at), text: it.text,
++              repeat: it.repeat === 'daily' ? 'daily' : 'once',
++              ...(it.dailyAt ? { dailyAt: it.dailyAt } : {}),
+               ...(it.targetName ? { to: it.targetName } : {}),
+               ...(it.createdBy ? { from: it.createdBy } : {})
+             }))
+@@ -1939,10 +1942,15 @@ export function buildToolDefs() {
+           if (!hit) return err('没找到对应的待触发提醒（可用 list 查看 id）');
+           return ok({ canceled: true, text: hit.text, at: fmt(hit.at) });
+         }
++        const repeat = String(args.repeat || 'once') === 'daily' ? 'daily' : '';
++        let dailyAt = '';
+         let at = null;
+         if (args.at !== undefined && String(args.at).trim() !== '') {
++          dailyAt = repeat === 'daily' ? String(args.at).trim() : '';
+           at = nextAtFromHHMM(String(args.at));
+           if (at === null) return err('at 需要是 HH:MM（24 小时制，如 09:30）');
++        } else if (repeat === 'daily') {
++          return err('每日提醒需要用 at 指定固定时刻，例如 "07:00"');
+         } else {
+           const m = Number(args.minutes);
+           if (!Number.isFinite(m) || m < 1 || m > 30 * 24 * 60) return err('minutes 需要是 1~43200 之间的数字（最多 30 天）');
+@@ -1966,14 +1974,19 @@ export function buildToolDefs() {
+             }
+           }
+           const createdBy = fromOk ? fromArg : '';
+-          const { id } = store.add({
++          const added = store.add({
+             chatKey: ctx.chatKey, at,
+             text: String(args.text ?? ''),
+             createdBy,
+-            targetName: String(args.to ?? '')
++            targetName: String(args.to ?? ''),
++            repeat,
++            dailyAt
+           });
+           return ok({
+-            created: true, id, at: fmt(at),
++            created: !added.existing, existing: added.existing === true,
++            id: added.id, at: fmt(added.at),
++            repeat: repeat === 'daily' ? 'daily' : 'once',
++            ...(added.dailyAt ? { dailyAt: added.dailyAt } : {}),
+             ...(createdBy ? { from: createdBy } : {}),
+             note: '到点你会被唤醒并知道该提醒什么；不需要再回复这条结果。'
+               + (fromArg && !fromOk
+diff --git a/test/reminders-api.test.mjs b/test/reminders-api.test.mjs
+index 8dda6a1..eea0a93 100644
+--- a/test/reminders-api.test.mjs
++++ b/test/reminders-api.test.mjs
+@@ -16,7 +16,8 @@ const now = Date.now();
+ fs.writeFileSync(path.join(root, 'reminders.json'), JSON.stringify({
+   items: [
+     { id: 'r1', chatKey: 'group:1', at: now + 600000, text: '去吃饭', createdBy: '彭于晏', targetName: '吴彦祖', status: 'pending', createdAt: now, firedAt: null, finishedAt: null },
+-    { id: 'r2', chatKey: 'group:1', at: now - 60000, text: '喝水', createdBy: '', targetName: '', status: 'fired', createdAt: now - 3600000, firedAt: now, finishedAt: now }
++    { id: 'r2', chatKey: 'group:1', at: now - 60000, text: '喝水', createdBy: '', targetName: '', status: 'fired', createdAt: now - 3600000, firedAt: now, finishedAt: now },
++    { id: 'r3', chatKey: 'group:1', at: now + 1200000, text: '每日事项', createdBy: '', targetName: '', repeat: 'daily', dailyAt: '07:00', firedCount: 2, lastFiredAt: now - 86400000, status: 'pending', createdAt: now - 7200000, firedAt: null, finishedAt: null }
+   ]
+ }, null, 1));
+ 
+@@ -82,4 +83,10 @@ test('GET /api/reminders：归属 from/to 透出，空归属给空串（不编
+   assert.equal(done.from, '');
+   assert.equal(done.to, '');
+   assert.equal(done.status, 'fired');
++  const daily = r.body?.pending?.find((x) => x.id === 'r3');
++  assert.ok(daily, 'r3 应在待触发里');
++  assert.equal(daily.repeat, 'daily');
++  assert.equal(daily.dailyAt, '07:00');
++  assert.equal(daily.firedCount, 2);
++  assert.ok(daily.lastFiredAt);
+ });
+diff --git a/test/reminders.test.mjs b/test/reminders.test.mjs
+index 727f454..9fcf810 100644
+--- a/test/reminders.test.mjs
++++ b/test/reminders.test.mjs
+@@ -79,6 +79,65 @@ test('ReminderStore：新增/查询/取消/到期/过期与限额', () => {
+   const reopened = new ReminderStore(file);
+   assert.equal(reopened.list('group:1').filter((x) => x.status === 'pending').length, 1);
+ });
++
++test('每日提醒：稳定系列、重复写入去重、成功后推进、取消与离线跳期', () => {
++  const store = new ReminderStore(path.join(dataDir, 'reminders-daily.json'));
++  const first = store.add({
++    chatKey: 'private:77',
++    at: Date.now(),
++    text: '每天起床',
++    repeat: 'daily',
++    dailyAt: '7:00'
++  });
++  const item = store.list('private:77').find((x) => x.id === first.id);
++  assert.equal(item.repeat, 'daily');
++  assert.equal(item.dailyAt, '07:00');
++  assert.equal(item.status, 'pending');
++
++  const duplicate = store.add({
++    chatKey: 'private:77',
++    at: Date.now(),
++    text: '每天起床',
++    repeat: 'daily',
++    dailyAt: '07:00'
++  });
++  assert.equal(duplicate.existing, true);
++  assert.equal(duplicate.id, first.id);
++  assert.equal(store.list('private:77').length, 1);
++
++  const before = Number(item.at);
++  store.markFired(item.id, before + 12_000);
++  const advanced = store.list('private:77').find((x) => x.id === first.id);
++  assert.equal(advanced.status, 'pending');
++  const nextClock = new Intl.DateTimeFormat('zh-CN', {
++    timeZone: 'Asia/Shanghai', hour12: false, hour: '2-digit', minute: '2-digit'
++  }).format(new Date(advanced.at));
++  assert.equal(nextClock, '07:00');
++  assert.ok(advanced.at - before >= 23 * 60 * 60 * 1000);
++  assert.ok(advanced.at - before <= 25 * 60 * 60 * 1000);
++  assert.equal(advanced.firedCount, 1);
++  assert.ok(advanced.lastFiredAt);
++
++  advanced.at = Date.now() - 13 * 60 * 60 * 1000;
++  advanced.originalAt = advanced.at;
++  assert.equal(store.expired().some((x) => x.id === first.id), false);
++  assert.equal(store.due().some((x) => x.id === first.id), false, '离线跨期不补发旧批次');
++  assert.ok(advanced.at > Date.now(), '自动跳到最近的下一次');
++
++  const canceled = store.cancel({ id: first.id, chatKey: 'private:77' });
++  assert.equal(canceled.status, 'canceled');
++  assert.equal(store.list('private:77').length, 0);
++});
++
++test('每日提醒：at 格式错误或缺少 dailyAt 时不创建', () => {
++  const store = new ReminderStore(path.join(dataDir, 'reminders-daily-invalid.json'));
++  assert.throws(() => store.add({
++    chatKey: 'private:78', at: Date.now(), text: 'x', repeat: 'daily'
++  }), /需要 HH:MM/);
++  assert.throws(() => store.add({
++    chatKey: 'private:78', at: Date.now(), text: 'x', repeat: 'daily', dailyAt: '25:00'
++  }), /时间不合法/);
++});
+   // 不带 id 的 cancel 取"最近一条"而不是最早一条（2026-09-29 审查 P2）
+   const now3 = Date.now();
+   const s3 = new ReminderStore(path.join(dataDir, 'reminders-latest.json'));
+diff --git a/test/tools-play.test.mjs b/test/tools-play.test.mjs
+index 0f92150..07fa3e7 100644
+--- a/test/tools-play.test.mjs
++++ b/test/tools-play.test.mjs
+@@ -93,6 +93,38 @@ test('remind：新增（HH:MM / 分钟）、列表、取消；无 store 时优
+   assert.equal((await tool('remind').execute({ chatKey: 'group:1', kind: 'group' }, { action: 'list' })).isError, true);
+ });
+ 
++test('remind：每日提醒创建、列表标识、重复去重与整系列取消', async () => {
++  const store = new ReminderStore(path.join(dataDir, 'reminders-daily-tool.json'));
++  const ctx = { chatKey: 'private:44', kind: 'private', chatId: '44', reminders: store };
++  const daily = parse(await tool('remind').execute(ctx, {
++    action: 'add', repeat: 'daily', at: '07:00', text: '叫我起床'
++  }));
++  assert.equal(daily.created, true);
++  assert.equal(daily.repeat, 'daily');
++  assert.equal(daily.dailyAt, '07:00');
++
++  const duplicate = parse(await tool('remind').execute(ctx, {
++    action: 'add', repeat: 'daily', at: '7:00', text: '叫我起床'
++  }));
++  assert.equal(duplicate.created, false);
++  assert.equal(duplicate.existing, true);
++  assert.equal(duplicate.id, daily.id);
++
++  const list = parse(await tool('remind').execute(ctx, { action: 'list' }));
++  assert.equal(list.pending, 1);
++  assert.equal(list.reminders[0].repeat, 'daily');
++  assert.equal(list.reminders[0].dailyAt, '07:00');
++
++  const canceled = parse(await tool('remind').execute(ctx, { action: 'cancel', id: daily.id }));
++  assert.equal(canceled.canceled, true);
++  assert.equal(store.list('private:44').length, 0);
++
++  const missingTime = await tool('remind').execute(ctx, {
++    action: 'add', repeat: 'daily', minutes: 30, text: '错误'
++  });
++  assert.equal(missingTime.isError, true);
++});
++
+ test('remind 归属（2026-10-10 复核版）：from 必须对上本轮消息里的人；对不上/不填都不记', async () => {
+   const store = new ReminderStore(path.join(dataDir, 'reminders-attribution-tool.json'));
+   const base = { chatKey: 'group:43', kind: 'group', chatId: '43', reminders: store };
+diff --git a/ui/pages/moments.js b/ui/pages/moments.js
+index edd0e3b..93ea886 100644
+--- a/ui/pages/moments.js
++++ b/ui/pages/moments.js
+@@ -338,7 +338,8 @@ async function loadRemindersView() {
+   }
+   const rows = (items, done) => items.map((it) => {
+     const time = new Date(it.at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+-    const statusLabel = { fired: '已触发', canceled: '已取消', expired: '已过期' }[it.status] || String(it.status || '');
++    const statusLabel = { fired: '已触发', canceled: '已取消', expired: '已过期', failed: '发送失败' }[it.status] || String(it.status || '');
++    const repeat = it.repeat === 'daily' ? `每天 ${it.dailyAt || ''}`.trim() : '';
+     // 归属（谁提的/提醒谁）：与提醒到点派发时的话术同源（字段来自 config 的 memberNotes 口径）
+     const from = String(it.from || '').trim();
+     const to = String(it.to || '').trim();
+@@ -348,6 +349,7 @@ async function loadRemindersView() {
+     return `<div class="reminder-row" data-id="${esc(it.id)}" data-chatkey="${esc(it.chatKey)}">`
+       + `<span class="reminder-when">${esc(time)}</span>`
+       + `<span class="reminder-chat">${esc(formatChatTitle(it.chatKey, chatNameOf(it.chatKey)))}</span>`
++      + (repeat ? `<span class="muted" title="每日循环">${esc(repeat)}</span>` : '')
+       + (attr ? `<span class="reminder-attr" title="${esc(attr)}">${esc(attr)}</span>` : '')
+       + `<span class="reminder-text">${esc(it.text)}</span>`
+       + (done ? `<span class="muted">${esc(statusLabel)}</span>` : '<button type="button" class="btn btn-small reminder-cancel-btn">取消</button>')
+@@ -779,4 +781,4 @@ export {
+   loadRemindersView, momentStatusLabel, renderDailyMomentsSection, renderExperimentalSettingsSectionImpl,
+   renderGroupChecklist, renderGroupGameSection, renderMomentWindowRow, renderQzoneInteractionSection,
+   renderRemindersSection
+-};
+\ No newline at end of file
++};

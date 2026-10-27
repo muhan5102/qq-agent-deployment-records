@@ -1,0 +1,99 @@
+--- a/src/core/orchestrator.js
++++ b/src/core/orchestrator.js
+@@ -123,6 +123,7 @@
+ import { chatCompletion, chatCompletionWithRetry, addUsage, emptyUsage, isRetryableError } from '../llm/llm.js';
+ import { buildToolDefs, toOpenAiTools, executeTool, platformToolAllowed } from '../tools/tools.js';
+ import { normalizeMid, downloadImageAsDataUrl } from '../tools/tools-core.js';
++import { applyDeepVideoIntent } from '../tools/video-link.js';
+ import { visionEnabled } from '../llm/vision-scan.js';
+ import { resolvePersona } from '../personas.js';
+ import { currentProviders } from './providers.js';
+@@ -2285,7 +2286,8 @@
+       reminders: this.reminders,
+       // 本轮触发消息（remind 的 from 兜底要判断"是否只有一个发送者"；只带最小字段）
+       triggerEntries: (triggerEntries || []).map((m) => ({
+-        senderId: m?.senderId || '', senderName: m?.senderName || '', self: Boolean(m?.self)
++        senderId: m?.senderId || '', senderName: m?.senderName || '', self: Boolean(m?.self),
++        text: String(m?.text || '').slice(0, 1000)
+       })),
+       // 群游戏（group_game 工具）：进行中的局由管理器负责推进与判定
+       games: this.getGames?.() || null,
+@@ -2488,7 +2490,16 @@
+         signal.throwIfAborted();
+         if (!canRun(chatKey)) throw new Error('Run cancelled');
+         const name = call?.function?.name ?? '';
+-        const argsRaw = call?.function?.arguments ?? '{}';
++        let argsRaw = call?.function?.arguments ?? '{}';
++        if (name === 'inspect_video_link') {
++          try {
++            const parsedArgs = typeof argsRaw === 'object' ? argsRaw : JSON.parse(String(argsRaw));
++            const forced = applyDeepVideoIntent(parsedArgs, ctx.triggerEntries);
++            if (forced !== parsedArgs) argsRaw = JSON.stringify(forced);
++          } catch {
++            // 非法参数交回原工具处理，不在调度层吞掉错误。
++          }
++        }
+         if (name === 'web_search' || name === 'web_fetch') webSearchCount += 1;
+         session.webSearchCount = webSearchCount;
+         markActivity(`正在调用 ${name}…`);
+--- a/src/tools/video-link.js
++++ b/src/tools/video-link.js
+@@ -57,6 +57,23 @@
+   return String(value || '').trim().replace(/[)\]}>，。！？、；;'"]+$/u, '');
+ }
+ 
++const DEEP_VIDEO_INTENT = /(?:详细分析|完整分析|认真看完整|认真看完|完整看一遍|做详细笔记|做成详细笔记|完整笔记)/;
++const DEEP_VIDEO_NEGATION = /(?:不要|不用|无需|不必|别)(?:再)?(?:详细分析|完整分析|认真看|做详细笔记|做成详细笔记)/;
++
++/** 只检查本轮触发消息，决定是否强制视频工具进入 deep 模式。 */
++export function hasDeepVideoIntent(triggerEntries) {
++  return (Array.isArray(triggerEntries) ? triggerEntries : []).some((message) => {
++    if (message?.self) return false;
++    const text = String(message?.text || '').trim();
++    return text && DEEP_VIDEO_INTENT.test(text) && !DEEP_VIDEO_NEGATION.test(text);
++  });
++}
++
++export function applyDeepVideoIntent(args, triggerEntries) {
++  if (!args || typeof args !== 'object' || Array.isArray(args) || !hasDeepVideoIntent(triggerEntries)) return args;
++  return { ...args, mode: 'deep' };
++}
++
+ export function videoPlatformOf(url) {
+   let host = '';
+   try { host = new URL(String(url)).hostname.toLowerCase(); } catch { return ''; }
+--- a/test/video-link.test.mjs
++++ b/test/video-link.test.mjs
+@@ -1,8 +1,10 @@
+ import test from 'node:test';
+ import assert from 'node:assert/strict';
+ import {
++  applyDeepVideoIntent,
+   bilibiliPageNumber,
+   formatSubtitleBody,
++  hasDeepVideoIntent,
+   normalizeBilibiliLink,
+   normalizeVideoLink,
+   parseWebVtt,
+@@ -40,6 +42,21 @@
+   assert.throws(() => normalizeVideoLink('https://example.com/video/123'), /暂不支持/);
+ });
+ 
++test('“详细分析/完整笔记/认真看完”强制 deep，普通看看和否定句不强制', () => {
++  const deepPhrases = [
++    '帮我详细分析这个视频',
++    '认真看完以后做成完整笔记',
++    '请完整分析一下'
++  ];
++  for (const text of deepPhrases) {
++    assert.equal(hasDeepVideoIntent([{ text, self: false }]), true);
++    assert.equal(applyDeepVideoIntent({ url: 'x', mode: 'quick' }, [{ text }]).mode, 'deep');
++  }
++  assert.equal(hasDeepVideoIntent([{ text: '看看这个视频讲了什么' }]), false);
++  assert.equal(hasDeepVideoIntent([{ text: '不要详细分析，简单说说' }]), false);
++  assert.equal(hasDeepVideoIntent([{ text: '帮我详细分析这个视频', self: true }]), false);
++});
++
+ test('B站分 P 页码只接受正整数', () => {
+   assert.equal(bilibiliPageNumber('https://www.bilibili.com/video/BV1Qwby6DEu1?p=3'), 3);
+   assert.equal(bilibiliPageNumber('https://www.bilibili.com/video/BV1Qwby6DEu1?p=0'), 1);

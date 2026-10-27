@@ -1,0 +1,175 @@
+--- a/src/core/orchestrator.js
++++ b/src/core/orchestrator.js
+@@ -1988,7 +1988,7 @@
+       // 模型往返（send_voice 的描述还极具诱导性）。与上面几项同一口径（2026-10-03 全量审查）。
+       if (!ttsConfigured(cfg) && d.name === 'send_voice') return false;
+       if (cfg.reminders?.enabled === false && d.name === 'remind') return false;
+-      if (!searchEnabled && (d.name === 'web_search' || d.name === 'web_fetch')) return false;
++      if (!searchEnabled && (d.name === 'web_search' || d.name === 'web_fetch' || d.name === 'render_web_page')) return false;
+       if (!selfWakeEnabled && d.name === 'schedule_wake') return false;
+       // 群游戏引擎关掉：group_game 工具一并摘掉 —— 提示词侧（prompt.js 玩法与工具箱）
+       // 只在开启时教"主持小游戏"，工具表却恒在，模型仍会去调一个必然报错的工具
+--- a/src/llm/prompt.js
++++ b/src/llm/prompt.js
+@@ -477,6 +477,7 @@
+         : '- 被用一个词/称呼调侃、而拿不准它指什么时（就算那个词本身你认识，也可能是群里的新梗/新外号），同样先搜一下这个词的意思/出处再决定怎么接；一轮没搜到就换个关键词再搜（加"梗""出处""抖音""什么意思"再试）。还是只有字面意思时，别下"没这个梗 / 它就是这个意思"的结论——抖音那类短视频平台刚火的梗，搜索引擎常常抓不到，这是搜索的盲区、不等于它没有别的意思；这种情况照实说"只搜到字面意思、没搜到出处"，顺势问一句或接着玩（"这又是什么新梗"），别硬编、也别装出"听不懂"的样子糊弄（装傻要像在演，不能像真懵）（2026-10-12 用户反馈：扎啤是最近火的抖音梗，浏览器搜不出来很正常）。',
+       '- 搜过以后，回话要让人看得出你查过：把结论自然带一句——搜到了就说"搜了下，就是XX"；没搜到出处就照实讲（"搜了两轮，只有字面意思……这什么新梗？"），别让搜了跟没搜一个样，也别把"搜不到"说成"没这回事"（2026-10-12 用户反馈："搜了怎么回答还是一样的"）。',
+       '- 群友直接发来 URL 并问能不能看到/写了什么时，直接用 web_fetch 抓取该 URL 读正文，不要凭记忆猜。',
++      '- web_fetch 只拿到导航、空壳或很少文字，或者页面明显由 JavaScript 加载、需要看自动加载的评论区时，改用 render_web_page 渲染。它不能登录，也不能保证拿到需要手动点“查看更多”的全部评论；拿不全就照实说。',
+       '- 需要搜索时允许多走几步：连续 web_search / web_fetch 2~3 步，换关键词、打开页面、交叉验证后再回复；搜索过程中不需要先回复，拿到结果再回。事实性问题可以比闲聊稍微多写一点，但仍要简洁。'
+     );
+   } else {
+--- a/src/tools/tools-core.js
++++ b/src/tools/tools-core.js
+@@ -161,6 +161,7 @@
+ import { readForwardMessages, readForwardNodesById } from '../onebot/forward-reader.js';
+ import { convertGifToStillStrip, convertVideoToFrameStrip, convertStillImageToJpeg, fetchOversizedImageAsJpeg } from './image-downsample.js';
+ import { transcribeMessageAudio } from './audio-transcribe.js';
++import { renderWebPage } from './render-web.js';
+ import { memoryVisibilityOf } from '../core/memory-visibility.js';
+ 
+ 
+@@ -2459,6 +2460,30 @@
+         }
+       }
+     },
++    {
++      name: 'render_web_page',
++      description: '用真实 Chromium 渲染动态网页并提取正文，适合 web_fetch 只拿到空壳、需要执行 JavaScript、自动滚动加载评论或“展开更多”内容的页面。只读取公开页面，不登录、不提交表单。会启动一次浏览器，通常需要 10～30 秒。',
++      parameters: {
++        type: 'object',
++        properties: {
++          url: { type: 'string', description: '要渲染的 http(s) 网页 URL' }
++        },
++        required: ['url']
++      },
++      async execute(ctx, args) {
++        try {
++          const result = await renderWebPage(String(args.url ?? ''), { signal: ctx.signal });
++          return ok({
++            url: result.finalUrl,
++            title: result.title,
++            truncated: result.truncated,
++            content: sanitizeUserText(result.markdown)
++          });
++        } catch (error) {
++          return err(`动态网页渲染失败：${sanitizeUserText(String(error?.message ?? error))}`);
++        }
++      }
++    },
+     {
+       name: 'finish',
+       description: '明确结束本次处理，并把下一次新会话需要的工作状态交接下去。summary 写本轮结论；话题还会继续时补充 topic/hypotheses/evidence/facts/decisions/rejectedDirections/openQuestions/nextStep。**私聊里要写细**（这是下一轮接着聊的底稿）：约定写清谁答应什么、什么时间，facts 至少 2~3 条具体事实，聊到哪儿停了、下次能自然接什么也写上；群里保持简洁。只写可检查的状态，不写逐步隐藏思维。话题已完成且旧交接不再有用时设 clearHandoff=true。不调用也可以，直接结束文本输出同样代表结束。',
+--- a/src/tools/render-web.js
++++ b/src/tools/render-web.js
+@@ -0,0 +1,85 @@
++// 按需启用的动态网页渲染：只有普通 web_fetch 拿不到正文时才启动 Chromium。
++import { spawn } from 'node:child_process';
++import fs from 'node:fs';
++import { validateFetchUrl } from '../llm/safe-fetch.js';
++
++const CRAWL_PYTHON = process.env.QQ_AGENT_CRAWL4AI_PYTHON
++  || '/mnt/data/qq-agent/tools/crawl4ai/venv/bin/python';
++const CRAWL_SCRIPT = process.env.QQ_AGENT_CRAWL4AI_SCRIPT
++  || '/mnt/data/qq-agent/tools/crawl4ai/fetch_page.py';
++const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
++const TIMEOUT_MS = 55_000;
++
++let active = 0;
++
++export function crawl4aiAvailable() {
++  return fs.existsSync(CRAWL_PYTHON) && fs.existsSync(CRAWL_SCRIPT);
++}
++
++export async function renderWebPage(rawUrl, { signal } = {}) {
++  if (!crawl4aiAvailable()) throw new Error('Crawl4AI 未安装或不完整');
++  const validated = await validateFetchUrl(rawUrl);
++  if (active >= 1) throw new Error('另一个网页正在渲染，请稍后再试');
++  active += 1;
++  try {
++    const result = await new Promise((resolve, reject) => {
++      const child = spawn(CRAWL_PYTHON, [CRAWL_SCRIPT, validated.url.toString()], {
++        stdio: ['ignore', 'pipe', 'pipe'],
++        windowsHide: true,
++        env: { ...process.env, CRAWL4AI_NO_CLOUD_NOTICE: '1' }
++      });
++      const stdout = [];
++      let outputBytes = 0;
++      let stderr = '';
++      let settled = false;
++      const finish = (error, value) => {
++        if (settled) return;
++        settled = true;
++        clearTimeout(timer);
++        signal?.removeEventListener('abort', onAbort);
++        if (error) reject(error);
++        else resolve(value);
++      };
++      const fail = (error) => {
++        try { child.kill('SIGKILL'); } catch { /* noop */ }
++        finish(error);
++      };
++      const onAbort = () => fail(signal?.reason || new Error('已中止'));
++      const timer = setTimeout(() => fail(new Error('动态网页渲染超时')), TIMEOUT_MS);
++      signal?.addEventListener('abort', onAbort, { once: true });
++      child.stdout.on('data', (chunk) => {
++        outputBytes += chunk.length;
++        if (outputBytes > MAX_OUTPUT_BYTES) return fail(new Error('网页渲染输出过大'));
++        stdout.push(chunk);
++      });
++      child.stderr.on('data', (chunk) => {
++        stderr = (stderr + chunk.toString('utf8')).slice(-3000);
++      });
++      child.on('error', (error) => finish(new Error(`Crawl4AI 无法启动：${error.message}`)));
++      child.on('close', (code) => {
++        if (settled) return;
++        if (code !== 0) {
++          const detail = stderr.trim().split('\n').slice(-2).join('；').slice(-500);
++          return finish(new Error(`网页渲染失败（${code}）：${detail || '无错误输出'}`));
++        }
++        try {
++          finish(null, JSON.parse(Buffer.concat(stdout).toString('utf8')));
++        } catch {
++          finish(new Error('Crawl4AI 返回了无法解析的数据'));
++        }
++      });
++    });
++    if (!result?.success) throw new Error(result?.error || '网页渲染失败');
++    if (result.finalUrl) await validateFetchUrl(result.finalUrl);
++    const markdown = String(result.markdown || '').trim();
++    if (!markdown) throw new Error('网页渲染成功，但没有提取到正文');
++    return {
++      title: String(result.title || '').trim(),
++      finalUrl: String(result.finalUrl || rawUrl),
++      markdown,
++      truncated: result.truncated === true
++    };
++  } finally {
++    active = Math.max(0, active - 1);
++  }
++}
+--- a/test/render-web.test.mjs
++++ b/test/render-web.test.mjs
+@@ -0,0 +1,22 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import { crawl4aiAvailable, renderWebPage } from '../src/tools/render-web.js';
++import { buildToolDefs } from '../src/tools/tools-core.js';
++
++test('render_web_page 工具已注册，并说明动态页面和评论区用途', () => {
++  const tool = buildToolDefs().find((item) => item.name === 'render_web_page');
++  assert.ok(tool);
++  assert.deepEqual(tool.parameters.required, ['url']);
++  assert.match(tool.description, /JavaScript/);
++  assert.match(tool.description, /评论/);
++});
++
++test('renderWebPage 在启动浏览器前拒绝本机/内网地址', async () => {
++  await assert.rejects(() => renderWebPage('http://127.0.0.1:3210/'), /内网|本机/);
++});
++
++test('Crawl4AI 能渲染普通公开网页', { skip: !crawl4aiAvailable() }, async () => {
++  const result = await renderWebPage('https://example.com');
++  assert.match(result.title, /Example Domain/);
++  assert.match(result.markdown, /documentation examples|文档示例/);
++});
