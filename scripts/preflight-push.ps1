@@ -80,8 +80,18 @@ $secretPatterns = @(
     '[A-Za-z]:\\Users\\[^\\]+',
     '(?:group|private):\d{5,}'
 )
+$blockedPathPatterns = @(
+    '(^|/)(data|memory|sessions|knowledge|plugin-data|plugin-secrets|backups?)(/|$)',
+    '(^|/)(memes|config|usage-today|usage-daily|balance-daily)\.json$',
+    '\.(sqlite|sqlite-wal|sqlite-shm|db|env)$'
+)
 
 foreach ($file in $trackedFiles) {
+    foreach ($pattern in $blockedPathPatterns) {
+        if ($file -match $pattern) {
+            Add-Failure "当前跟踪了禁止发布的路径：$file"
+        }
+    }
     foreach ($term in $denyTerms) {
         if ($file.IndexOf($term, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
             Add-Failure "当前文件名命中受限词：$file"
@@ -113,6 +123,11 @@ foreach ($commit in $commits) {
     }
 
     foreach ($file in (git -c core.quotepath=false ls-tree -r --name-only $commit)) {
+        foreach ($pattern in $blockedPathPatterns) {
+            if ($file -match $pattern) {
+                Add-Failure "历史中跟踪了禁止发布的路径：$($commit.Substring(0, 7)) $file"
+            }
+        }
         foreach ($term in $denyTerms) {
             if ($file.IndexOf($term, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
                 Add-Failure "历史文件名命中受限词：$($commit.Substring(0, 7)) $file"

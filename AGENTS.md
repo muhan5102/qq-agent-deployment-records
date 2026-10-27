@@ -11,4 +11,5 @@
 - 暂存只能使用明确路径，禁止 `git add -A`、`git add .`、通配符和目录级暂存。
 - 提交或推送前必须运行 `scripts/preflight-push.ps1`，只有在输出 `PUSH_PREFLIGHT=PASS` 后才能继续。
 - 历史重写后用 `git push --force-with-lease origin main`；禁止裸 `--force`、`--all`、`--mirror` 和推送本地恢复引用。
+- 知识库、梗库、知识记录、运行数据、配置快照和数据库文件一律禁止进入 Git；无法确认内容属性时按禁止处理。
 - 完整的提交与推送流程见 `GITHUB-PUSH-RULES.md`。
