@@ -8,3 +8,7 @@
 - 提交前必须同时扫描拟提交内容和全部 Git 历史；命中时立即移出暂存区并停止提交或推送。
 - 修复已公开内容时，优先使用中性表述；不得在修复说明里复述被清理的具体字样。
 - 推送必须在当前对话中逐次取得明确同意；仅允许本地提交时不得自动推送。
+- 暂存只能使用明确路径，禁止 `git add -A`、`git add .`、通配符和目录级暂存。
+- 提交或推送前必须运行 `scripts/preflight-push.ps1`，只有在输出 `PUSH_PREFLIGHT=PASS` 后才能继续。
+- 历史重写后用 `git push --force-with-lease origin main`；禁止裸 `--force`、`--all`、`--mirror` 和推送本地恢复引用。
+- 完整的提交与推送流程见 `GITHUB-PUSH-RULES.md`。
