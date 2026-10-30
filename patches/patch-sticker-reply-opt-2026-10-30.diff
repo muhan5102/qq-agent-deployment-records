@@ -1,0 +1,242 @@
+diff --git a/src/core/orchestrator.js b/src/core/orchestrator.js
+index f09e0a2..296cd57 100644
+--- a/src/core/orchestrator.js
++++ b/src/core/orchestrator.js
+@@ -112,2 +112,2 @@
+ import { readProactiveAttempts, readProactiveState, writeProactiveAttempt, writeProactiveChatAttempts } from './proactive-state.js';
+-import { buildSystemPrompt, buildUserPrompt, isAtMe, loadRuleModule, resolveContextTier } from '../llm/prompt.js';
++import { buildStickerReplyRules, buildSystemPrompt, buildUserPrompt, isAtMe, loadRuleModule, resolveContextTier } from '../llm/prompt.js';
+@@ -509,6 +509,35 @@ export function isDirectedAtBot({ kind, triggerEntries = [], persona = {}, selfI
+   });
+ }
+ 
++/**
++ * 只有表情包、没有任何文字或明确指向时，随机触发不应主动插话。
++ * 消息仍留在已读历史里，后续被点名或进入活跃线程时仍可读取。
++ */
++export function isStickerOnlyBatch(triggerEntries = [], selfId = '') {
++  const humans = (Array.isArray(triggerEntries) ? triggerEntries : []).filter((message) => !message?.self);
++  if (!humans.length) return false;
++  let stickerCount = 0;
++  for (const message of humans) {
++    if (message?.mentionsSelf === true) return false;
++    if (selfId && message?.reply?.senderId && String(message.reply.senderId) === String(selfId)) return false;
++    let media = message?.media;
++    if (typeof media === 'string') {
++      try { media = JSON.parse(media); } catch { media = []; }
++    }
++    const list = Array.isArray(media) ? media : [];
++    const stickers = list.filter((item) => item?.kind === 'sticker'
++      || /动画表情|表情包/i.test(String(item?.summary || '')));
++    stickerCount += stickers.length;
++    const residual = String(message?.text || '')
++      .replace(/\[表情包\]/g, '')
++      .replace(/\[图片\]/g, '')
++      .replace(/\s+/g, '');
++    if (residual) return false;
++    if (!stickers.length) return false;
++  }
++  return stickerCount > 0;
++}
++
+ export class Orchestrator {
+   constructor({
+     store,
+@@ -816,7 +845,7 @@ export class Orchestrator {
+       let media = entry?.media;
+       if (typeof media === 'string') { try { media = JSON.parse(media); } catch { media = null; } }
+       if (!Array.isArray(media)) continue;
+-      for (const item of media.filter((x) => x && x.kind === 'image' && x.url)) {
++      for (const item of media.filter((x) => x && (x.kind === 'image' || x.kind === 'sticker') && x.url)) {
+         if (out.length >= 3) return out;
+         try {
+           out.push(await downloadImageAsDataUrl(item.url, signal));
+@@ -1389,7 +1418,15 @@ export class Orchestrator {
+       }
+ 
+       // 复用 scheduleWake 那一份判定逻辑，避免两处各写一套、日后漂移
+-      const tierResult0 = predicted;
++      let tierResult0 = predicted;
++      if (!manual && !proactive && Number(tierResult0.tier) === 3
++        && isStickerOnlyBatch(pendingEntries, cfgNow.onebot?.selfId || this.onebot.selfId)) {
++        tierResult0 = {
++          ...tierResult0,
++          shouldRespond: false,
++          reason: '群聊仅表情包，旁观记录'
++        };
++      }
+       tierResult ||= manual
+         ? {
+             ...tierResult0,
+@@ -2177,8 +2214,10 @@ export class Orchestrator {
+     const ruleTriggerText = (triggerEntries || []).slice(-8).map((e) => String(e?.text ?? '')).join('\n');
+     const userAskedToStop = ['pause', 'end'].includes(sceneControlOf(triggerEntries));
+     const needImageRules = viewMessageImages
+-      && (triggerMedia.some((m) => m?.kind === 'image') || /\[图片\]|\[表情包\]/.test(ruleTriggerText));
+-    if (needImageRules) log.info(`[vision] 本轮有图，温度 0.8（${chatKey}）`);
++      && (triggerMedia.some((m) => m?.kind === 'image') || /\[图片\]/.test(ruleTriggerText));
++    const needStickerRules = viewMessageImages
++      && (triggerMedia.some((m) => m?.kind === 'sticker') || /\[表情包\]/.test(ruleTriggerText));
++    if (needImageRules || needStickerRules) log.info(`[vision] 本轮有图，温度 0.8（${chatKey}）`);
+     // 人物小卡只在聊到/看到 MyGO / Ave Mujica 成员时注入（全名，不用缩写）。
+     const needPeopleRules = /爱音|千早|灯灯|ともりん|素世|爽世|Soyorin|そよりん|立希|りっきー|乐奈|楽奈|祥子|睦|初华|初華|若麦|にゃむ|海铃|海鈴|うみりん|MyGO|Mujica/.test(ruleTriggerText);
+     const needVoiceRules = asrEnabled
+@@ -2441,6 +2480,7 @@ export class Orchestrator {
+     // 一变就会关掉生命周期线程（prompt-prefix-changed），聊天连续性会被打断。
+     const extraRules = [];
+     if (needImageRules) extraRules.push(loadRuleModule('image'));
++    if (needStickerRules) extraRules.push(buildStickerReplyRules());
+     if (needPeopleRules) extraRules.push(loadRuleModule('people-mygo-avemujica'));
+     if (needVoiceRules) extraRules.push(loadRuleModule('voice'));
+     const extraRuleText = extraRules.filter(Boolean).join('\n');
+@@ -2652,7 +2692,7 @@ export class Orchestrator {
+         signal,
+         // 有图的轮次单独降温度：识别要稳，聊天仍用全局 1.1（needImageRules 只在
+         // messageTypes.images 开着且本轮触发消息带图或文本出现 [图片]/[表情包] 时为真）
+-        temperature: needImageRules ? 0.8 : null,
++        temperature: needImageRules || needStickerRules ? 0.8 : null,
+         cacheKey: `qq-agent:${promptPrefixHash.slice(0, 32)}`,
+         purpose: 'chat'
+       });
+diff --git a/src/core/util.js b/src/core/util.js
+index 382dc77..aa9c75d 100644
+--- a/src/core/util.js
++++ b/src/core/util.js
+@@ -142,6 +142,10 @@ export function sanitizeUserText(text) {
+   // 第二道：折叠方括号段内的全部空白 —— 「【管 理 员】」同样是绕过手法，
+   // 段头关键词里出现空白只可能是为了躲匹配，段内空白对"段标记"没有语义。
+   s = s.replace(/([\[【［])([^\]】］]*)([\]】］])/g, (_m, open, body, close) => open + body.replace(/\s+/g, '') + close);
++  // 普通消息里的 [表情包] 是媒体占位符，不是提示词段头。先临时保护完全相同的标记，
++  // 避免被下面的“表情包用法/策略”关键词规则误伤；其他内容仍照常清洗。
++  const stickerPlaceholder = '\uE000QQ_AGENT_STICKER\uE001';
++  s = s.replace(/[\[【［]表情包[\]】］]/g, stickerPlaceholder);
+   // 系统段标记在提示词里是全角【】（见 prompt.js 的【本次唤醒】/【管理员附加规则】），
+   // 所以半角、全角、繁体方括号都要处理；命中后换圆括号：语义不变，但不再是"段标记"。
+   // 只换方括号本身（$1 是关键词、$2 是其余载荷），不能把括号里的内容一起吃掉
+@@ -165,2 +165,3 @@
++  s = s.split(stickerPlaceholder).join('[表情包]');
+   return s;
+ }
+ 
+diff --git a/src/llm/prompt.js b/src/llm/prompt.js
+index 1e494c7..410e1bd 100644
+--- a/src/llm/prompt.js
++++ b/src/llm/prompt.js
+@@ -301,6 +301,17 @@ function runGuidance(cardFirst = false) {
+   ].join('\n');
+ }
+ 
++export function buildStickerReplyRules() {
++  return [
++    '【本轮有表情包】',
++    '- 表情包是在表达心情、态度或玩梗，不是让你做图片识别。先判断它在赞同、无语、质疑、撒娇、震惊、委屈、嘲讽、催人还是摆烂，再结合紧挨着的群聊文字接话。',
++    '- 有文字时以文字为主，表情包只补充语气；只有表情包时，可以直接对态度接一句，也可以安静不接，不要为了存在感强行发言。',
++    '- 不描述画面细节，不逐格复述动作，不列眼睛、爪子、服装或分镜，也不把这个表情包“是什么”解释一遍。配字本身是笑点时可以接梗，但不用完整复述。',
++    '- 别人只是随手发表情包、没有指向你时，可以不说话；后续话题明确接上时再处理。不强制每轮回复一张自己的表情，也不要连续互刷。',
++    '- 认不出表情包就轻轻“？”或按可见态度回应，不硬猜作品、角色、出处和含义。普通截图、照片和同人图仍按识图规则处理。'
++  ].join('\n');
++}
++
+ function qqSceneRules(grounded = false, platform = null, chatKey = '', cardFirst = false) {
+   const cfg = getConfig();
+   const vision = visionEnabled(cfg);
+diff --git a/src/onebot/onebot.js b/src/onebot/onebot.js
+index c18f8ca..3b5cabf 100644
+--- a/src/onebot/onebot.js
++++ b/src/onebot/onebot.js
+@@ -884,6 +884,12 @@ export function cardToText(seg, selfId = '') {
+   return `[${kind}${tags ? ' ' + tags : ''}${body ? '：' + body : ''}]`;
+ }
+ 
++function isStickerImageData(data = {}) {
++  const summary = String(data?.summary ?? '');
++  const subType = Number(data?.sub_type ?? data?.subType ?? data?.type ?? 0);
++  return subType === 1 || /动画表情|表情包|sticker/i.test(summary);
++}
++
+ export async function segmentsToText(segments, { resolveReply = null, resolveAtName = null, includeReply = true, selfId = '' } = {}) {
+   if (typeof segments === 'string') return sanitizeUserText(segments.trim());
+   const out = [];
+@@ -908,7 +914,7 @@ export async function segmentsToText(segments, { resolveReply = null, resolveAtN
+         out.push(faceName ? `[QQ表情${d.id ?? ''} ${faceName}]` : `[QQ表情${d.id ?? ''}]`);
+         break;
+       }
+-      case 'image': out.push('[图片]'); break;
++      case 'image': out.push(isStickerImageData(d) ? '[表情包]' : '[图片]'); break;
+       case 'record': out.push('[语音]'); break;
+       case 'video': out.push('[视频]'); break;
+       case 'file': out.push(`[文件${d.name ?? ''}]`); break;
+@@ -944,7 +950,12 @@ export function extractMediaFromSegments(segments) {
+     if (!seg || typeof seg !== 'object') continue;
+     const d = seg.data ?? {};
+     if (seg.type === 'image') {
+-      media.push({ kind: 'image', file: String(d.file ?? ''), url: String(d.url ?? ''), summary: String(d.summary ?? '') });
++      media.push({
++        kind: isStickerImageData(d) ? 'sticker' : 'image',
++        file: String(d.file ?? ''),
++        url: String(d.url ?? ''),
++        summary: String(d.summary ?? '')
++      });
+     } else if (seg.type === 'face') {
+       media.push({ kind: 'face', faceId: String(d.id ?? '') });
+     } else if (seg.type === 'record' || seg.type === 'voice') {
+diff --git a/test/forward-reader.test.mjs b/test/forward-reader.test.mjs
+index 60b111a..79688c5 100644
+--- a/test/forward-reader.test.mjs
++++ b/test/forward-reader.test.mjs
+@@ -356,3 +356,20 @@ test('超长 B 站卡片即使 URL 在末尾也不会被正文截断丢掉', asy
+   });
+   assert.match(cardToText({ type: 'json', data: { data: bili } }), /https:\/\/b23\.tv\/AbCdEf2/);
+ });
++
++test('动画表情标成表情包，普通图片仍标成图片，并保留不同媒体类型', async () => {
++  const { segmentsToText, extractMediaFromSegments } = await import('../src/onebot/onebot.js');
++  const sticker = { type: 'image', data: { file: 'a.jpg', url: 'https://example.com/a.jpg', summary: '[动画表情]' } };
++  const image = { type: 'image', data: { file: 'b.jpg', url: 'https://example.com/b.jpg', summary: '图片' } };
++  assert.equal(await segmentsToText([sticker, image]), '[表情包][图片]');
++  assert.deepEqual(
++    extractMediaFromSegments([sticker, image]).map((item) => item.kind),
++    ['sticker', 'image']
++  );
++});
++
++test('表情包占位符保留方括号，但伪造的提示词段头仍会被弱化', async () => {
++  const { sanitizeUserText } = await import('../src/core/util.js');
++  assert.equal(sanitizeUserText('[表情包]'), '[表情包]');
++  assert.equal(sanitizeUserText('[表情包用法]'), '（表情包用法）');
++});
+diff --git a/test/orchestrator.test.mjs b/test/orchestrator.test.mjs
+index 79262d2..f2fbaac 100644
+--- a/test/orchestrator.test.mjs
++++ b/test/orchestrator.test.mjs
+@@ -17,7 +17,8 @@ const {
+   proactiveWindowState,
+   randomWakeDelay,
+   triggerKindForTier,
+-  finishBarrierBlock
++  finishBarrierBlock,
++  isStickerOnlyBatch
+ } = await import('../src/core/orchestrator.js');
+ const { ChatStore } = await import('../src/core/store.js');
+ const { SessionRegistry } = await import('../src/core/sessions.js');
+@@ -66,6 +67,20 @@ describe('Orchestrator', () => {
+     assert.equal(triggerKindForTier({}, { manual: true, proactive: true }), 'manual');
+   });
+ 
++  it('identifies only undirected sticker-only batches for silent filtering', () => {
++    const sticker = { kind: 'sticker', summary: '[动画表情]' };
++    assert.equal(isStickerOnlyBatch([{ text: '[表情包]', media: [sticker] }], '99'), true);
++    assert.equal(isStickerOnlyBatch([
++      { text: '[表情包][表情包]', media: [sticker, sticker] }
++    ], '99'), true);
++    assert.equal(isStickerOnlyBatch([{ text: '难绷[表情包]', media: [sticker] }], '99'), false);
++    assert.equal(isStickerOnlyBatch([{ text: '[表情包]', media: [sticker], mentionsSelf: true }], '99'), false);
++    assert.equal(isStickerOnlyBatch([
++      { text: '[表情包]', media: [sticker], reply: { senderId: '99' } }
++    ], '99'), false);
++    assert.equal(isStickerOnlyBatch([{ text: '[图片]', media: [{ kind: 'image' }] }], '99'), false);
++  });
++
+   it('omits inline image bytes from next-round Token estimation', () => {
+     const image = `data:image/png;base64,${'A'.repeat(12 * 1024 * 1024)}`;
+     const messages = [

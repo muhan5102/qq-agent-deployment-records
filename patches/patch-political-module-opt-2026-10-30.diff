@@ -1,0 +1,62 @@
+diff --git a/src/core/orchestrator.js b/src/core/orchestrator.js
+index 296cd57..0898177 100644
+--- a/src/core/orchestrator.js
++++ b/src/core/orchestrator.js
+@@ -141,6 +141,12 @@ const log = createLogger('orchestrator');
+ const TEXT_NUDGE_PROMPT = '[系统] 你刚才把要说的话写成了普通文本，没有调用 send_message——它不会到达 QQ 群。'
+   + '如果那是你想对群里说的，就调用 send_message 发出去；如果确实不打算发言，直接结束，不要解释这条提示。';
+ const NOTE_ONLY_TEXT = /^(（|\(|【|\[|「|《)|安静|冷场|不发言|不吭声|不接话|不接了|新消息|草稿|本次唤醒|本轮|这轮|判断[:：]|思考[:：]|系统[:：]|没人说话|没人接|没人理|按作息|静着|没什么(能|可)|没得接|没有可接/i;
++const POLITICAL_CHAT_CONTEXT = /(?:政治|时政|公共政策|政府|外交|国际关系|选举|大选|议会|制裁|关税战|战争|地区冲突|军事|军队|示威|抗议|游行|社会争议|公共事件|民族|宗教|领土|主权|地缘|历史争议|热搜|舆情|网暴|骂战|跨国互骂|中土大战|左派|右派)/i;
++
++/** 只有在明确涉及公共议题时才加载详细政治规则，普通聊天不承担这部分提示词开销。 */
++export function needsPoliticalChatRules(text) {
++  return POLITICAL_CHAT_CONTEXT.test(String(text || ''));
++}
+ 
+ function looksLikeSpeechText(text) {
+   const value = String(text || '').trim();
+@@ -2220,6 +2226,7 @@ export class Orchestrator {
+     if (needImageRules || needStickerRules) log.info(`[vision] 本轮有图，温度 0.8（${chatKey}）`);
+     // 人物小卡只在聊到/看到 MyGO / Ave Mujica 成员时注入（全名，不用缩写）。
+     const needPeopleRules = /爱音|千早|灯灯|ともりん|素世|爽世|Soyorin|そよりん|立希|りっきー|乐奈|楽奈|祥子|睦|初华|初華|若麦|にゃむ|海铃|海鈴|うみりん|MyGO|Mujica/.test(ruleTriggerText);
++    const needPoliticsRules = needsPoliticalChatRules(ruleTriggerText);
+     const needVoiceRules = asrEnabled
+       && (triggerMedia.some((m) => m?.kind === 'audio') || /\[语音\]|\.(m4a|mp3|wav|amr|aac|ogg)\b/i.test(ruleTriggerText));
+     const systemPrompt = buildSystemPrompt({
+@@ -2481,6 +2488,7 @@ export class Orchestrator {
+     const extraRules = [];
+     if (needImageRules) extraRules.push(loadRuleModule('image'));
+     if (needStickerRules) extraRules.push(buildStickerReplyRules());
++    if (needPoliticsRules) extraRules.push(loadRuleModule('politics'));
+     if (needPeopleRules) extraRules.push(loadRuleModule('people-mygo-avemujica'));
+     if (needVoiceRules) extraRules.push(loadRuleModule('voice'));
+     const extraRuleText = extraRules.filter(Boolean).join('\n');
+diff --git a/test/orchestrator.test.mjs b/test/orchestrator.test.mjs
+index f2fbaac..a544bca 100644
+--- a/test/orchestrator.test.mjs
++++ b/test/orchestrator.test.mjs
+@@ -18,7 +18,8 @@ const {
+   randomWakeDelay,
+   triggerKindForTier,
+   finishBarrierBlock,
+-  isStickerOnlyBatch
++  isStickerOnlyBatch,
++  needsPoliticalChatRules
+ } = await import('../src/core/orchestrator.js');
+ const { ChatStore } = await import('../src/core/store.js');
+ const { SessionRegistry } = await import('../src/core/sessions.js');
+@@ -81,6 +82,14 @@ describe('Orchestrator', () => {
+     assert.equal(isStickerOnlyBatch([{ text: '[图片]', media: [{ kind: 'image' }] }], '99'), false);
+   });
+ 
++  it('loads political discussion rules only when the message has public-topic context', () => {
++    assert.equal(needsPoliticalChatRules('你怎么看这个公共政策'), true);
++    assert.equal(needsPoliticalChatRules('刷到一条国际新闻，外交上又吵起来了'), true);
++    assert.equal(needsPoliticalChatRules('这个中土大战到底怎么回事'), true);
++    assert.equal(needsPoliticalChatRules('今天中午吃什么'), false);
++    assert.equal(needsPoliticalChatRules('游戏里的地图冲突怎么打'), false);
++  });
++
+   it('omits inline image bytes from next-round Token estimation', () => {
+     const image = `data:image/png;base64,${'A'.repeat(12 * 1024 * 1024)}`;
+     const messages = [

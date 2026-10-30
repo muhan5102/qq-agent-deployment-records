@@ -1,0 +1,868 @@
+diff --git a/src/core/orchestrator.js b/src/core/orchestrator.js
+index 251be27..f09e0a2 100644
+--- a/src/core/orchestrator.js
++++ b/src/core/orchestrator.js
+@@ -118,9 +118,10 @@ import { buildToolDefs, toOpenAiTools, executeTool, platformToolAllowed } from '
+ import { normalizeMid, downloadImageAsDataUrl } from '../tools/tools-core.js';
+ import { skillGateMessage } from '../skills/registry.js';
+ import {
+-  applyDeepVideoIntent,
++  applyVideoIntent,
+   findRecentVideoLink,
+   hasDeepVideoIntent,
++  hasVisualVideoIntent,
+   normalizeVideoLink
+ } from '../tools/video-link.js';
+ import { visionEnabled } from '../llm/vision-scan.js';
+@@ -2525,34 +2526,42 @@ export class Orchestrator {
+         content: String(item?.text || '')
+       }))
+     ].filter((item) => item.content).slice(-16);
+-    const deepVideoUrl = hasDeepVideoIntent(triggerEntries)
++    const triggerVideoUrl = findRecentVideoLink(triggerEntries);
++    const followupVideoUrl = hasDeepVideoIntent(triggerEntries)
+       ? findRecentVideoLink(recentHumanMessages)
+       : '';
++    const prefetchVideoUrl = triggerVideoUrl || followupVideoUrl;
+     let prefetchedVideo = null;
+     const videoToolAvailable = toolDefs.some((def) => def?.name === 'inspect_video_link');
+-    if (deepVideoUrl && videoToolAvailable) {
++    if (prefetchVideoUrl && videoToolAvailable) {
+       signal.throwIfAborted();
+       if (this.aborted || !canRun(chatKey)) throw new Error('Run cancelled');
+-      markActivity('正在深度解析视频…');
+-      const videoArgs = { url: deepVideoUrl, mode: 'deep' };
++      markActivity(hasDeepVideoIntent(triggerEntries) ? '正在深度解析视频…' : '正在读取视频内容…');
++      const videoArgs = {
++        url: prefetchVideoUrl,
++        mode: hasDeepVideoIntent(triggerEntries) ? 'deep' : 'auto',
++        includeFrames: hasVisualVideoIntent(triggerEntries)
++      };
+       let result;
+       try {
+         result = await executeTool(toolDefs, ctx, 'inspect_video_link', JSON.stringify(videoArgs));
+       } finally {
+         markActivity('');
+       }
+-      let contentStr = '';
+-      if (Array.isArray(result.content)) {
+-        contentStr = result.content.filter((part) => part?.type === 'text').map((part) => part.text).join('\n');
+-      } else {
+-        contentStr = String(result.content || '');
+-      }
++      const contentParts = Array.isArray(result.content) ? result.content : null;
++      const contentStr = contentParts
++        ? contentParts.filter((part) => part?.type === 'text').map((part) => part.text).join('\n')
++        : String(result.content || '');
++      const visualParts = contentParts
++        ? contentParts.filter((part) => part?.type === 'image_url')
++        : [];
+       contentStr = safeSlice(contentStr, 24_000);
+       const videoStatus = result.videoStatus || (result.isError ? 'error' : 'complete');
+       if (!result.isError) {
+         prefetchedVideo = {
+-          url: normalizeVideoLink(deepVideoUrl),
++          url: normalizeVideoLink(prefetchVideoUrl),
+           content: contentStr,
++          parts: contentParts,
+           status: videoStatus,
+           source: result.videoSource || '',
+           model: result.videoModel || '',
+@@ -2572,19 +2581,22 @@ export class Orchestrator {
+         }
+       });
+       const header = result.isError
+-        ? '[系统：本轮用户明确要求详细看最近分享的视频，但视频读取失败。'
++        ? '[系统：本轮视频读取失败。'
+           + '不要假装已经看过或编造视频内容；可以简要说明没读到，并保留用户要求，稍后重试。]\n\n'
+         : videoStatus === 'pending'
+           ? '[系统：BiliNote 仍在后台处理，尚未完成。不要声称视频已经看完，也不要补写结果；'
+             + '可以先告诉用户正在整理，或者继续处理不依赖视频内容的少量事项。]\n\n'
+           : videoStatus === 'local'
+             ? '[系统：当前得到的是本地字幕/转写材料，不是 BiliNote 深度笔记。'
+-              + '按这些材料回答，并如实说明来源。]\n\n'
+-            : '[系统：BiliNote 深度笔记已完成。不要再重复调用 inspect_video_link；'
+-              + '请结合用户本轮的具体要求（例如计算、比较、结合刚才说的经历）组织自然回复，不要逐段复述笔记。]\n\n';
++              + '按这些材料和画面回答；优先读取九宫格里的字幕、标题和公告文字。'
++              + '不要重复调用 inspect_video_link，也不要把识别结果逐段复述。]\n\n'
++            : '[系统：视频材料已读取。不要再重复调用 inspect_video_link；'
++              + '请结合用户本轮的具体要求组织自然回复，不要逐段复述。]\n\n';
+       messages.push({
+         role: 'user',
+-        content: header + contentStr
++        content: visualParts.length
++          ? [{ type: 'text', text: header + contentStr }, ...visualParts]
++          : header + contentStr
+       });
+       this.sessions.update(session.id);
+       log.info(`[video] 已解析最近视频：status=${videoStatus} source=${result.videoSource || 'unknown'} model=${result.videoModel || 'none'}（${chatKey}）`);
+@@ -2796,7 +2808,7 @@ export class Orchestrator {
+         if (name === 'inspect_video_link') {
+           try {
+             const parsedArgs = typeof argsRaw === 'object' ? argsRaw : JSON.parse(String(argsRaw));
+-            const forced = applyDeepVideoIntent(parsedArgs, ctx.triggerEntries, recentHumanMessages);
++            const forced = applyVideoIntent(parsedArgs, ctx.triggerEntries, recentHumanMessages);
+             if (forced !== parsedArgs) argsRaw = JSON.stringify(forced);
+           } catch {
+             // 非法参数交回原工具处理，不在调度层吞掉错误。
+@@ -2820,7 +2832,7 @@ export class Orchestrator {
+           } catch { /* 交给工具本身报参数错误 */ }
+           if (requestedUrl && requestedUrl === prefetchedVideo.url) {
+             result = {
+-              content: prefetchedVideo.content,
++              content: prefetchedVideo.parts || prefetchedVideo.content,
+               videoStatus: prefetchedVideo.status,
+               videoSource: prefetchedVideo.source,
+               videoModel: prefetchedVideo.model,
+diff --git a/src/llm/prompt.js b/src/llm/prompt.js
+index 8e374d6..1e494c7 100644
+--- a/src/llm/prompt.js
++++ b/src/llm/prompt.js
+@@ -500,7 +500,7 @@ function qqSceneRules(grounded = false, platform = null, chatKey = '', cardFirst
+       '- 对方明确问"这是什么梗/啥意思"时，可以简短解释用法（不是百科定义），解释完顺手用一次；只有标题、没有可靠含义就说没查到，别硬编。',
+       '- 群友直接发来 URL 并问能不能看到/写了什么时，直接用 web_fetch 抓取该 URL 读正文，不要凭记忆猜。',
+       '- web_fetch 只拿到导航、空壳或很少文字，或者页面明显由 JavaScript 加载、需要看自动加载的评论区时，改用 render_web_page 渲染。它不能登录，也不能保证拿到需要手动点“查看更多”的全部评论；拿不全就照实说。',
+-      '- 群友发来 B 站、YouTube 或抖音视频链接并问内容时，优先调用 inspect_video_link：普通问“讲了什么”用默认 quick；只有明确问画面、动作、人物外形或视觉细节时才设 includeFrames=true。用户明确要求“认真看完整视频/做详细笔记”时才用 deep，deep 会消耗在线服务积分且可能等待较久。',
++      '- 视频链接由 inspect_video_link 默认 mode=auto：3 分钟内本地读取并自动看画面，超过 3 分钟优先 BiliNote；系统已给出视频材料时不要重复调用。回复视频时先接分享者那句话或情绪，普通分享最多补一个最关键的信息、数字或梗，不逐段复述，不说“看完了，我来总结”；只有对方明确要求“详细分析/完整笔记”时才展开。没看清、只听到音乐或材料不完整就照实说，不根据标题硬猜。',
+       '- 需要搜索时允许多走几步：连续 web_search / web_fetch 2~3 步，换关键词、打开页面、交叉验证后再回复；搜索过程中不需要先回复，拿到结果再回。事实性问题可以比闲聊稍微多写一点，但仍要简洁。'
+     );
+   } else {
+diff --git a/src/tools/image-downsample.js b/src/tools/image-downsample.js
+index ccc74c8..ff49de4 100644
+--- a/src/tools/image-downsample.js
++++ b/src/tools/image-downsample.js
+@@ -289,30 +289,80 @@ async function probeVideoSeconds(ffmpegPath, buffer, signal) {
+   }
+ }
+ 
++function videoStripVf({ seconds, start = 0, span = 0, frames = 9, columns = 3, width = 320 }) {
++  const safeFrames = Math.max(1, Math.min(18, Math.round(Number(frames) || 9)));
++  const safeColumns = Math.max(1, Math.min(safeFrames, Math.round(Number(columns) || 3)));
++  const rows = Math.ceil(safeFrames / safeColumns);
++  const safeSpan = Math.max(0.1, Number(span) || Number(seconds) || 10);
++  const safeStart = Math.max(0, Number(start) || 0);
++  const rate = safeFrames / safeSpan;
++  return `trim=start=${safeStart.toFixed(3)}:duration=${safeSpan.toFixed(3)},`
++    + `setpts=PTS-STARTPTS,fps=${rate.toFixed(6)},scale=${Math.max(160, Number(width) || 320)}:-2,`
++    + `tpad=stop_mode=clone:stop=${Math.max(0, safeFrames - 1)},tile=${safeColumns}x${rows}`;
++}
++
+ /**
+- * 视频 → JPEG 帧条（2×2 四宫格，与 GIF 同一口径）。
+- * 为什么要有它：视频给模型的默认只有音轨（get_message_audio 转写），画面本身它看不到 ——
+- * 用户 2026-09-26 反馈"发视频它只回一句视频只能听声"。做法：按总时长均匀抽 4 帧拼一张 JPEG
+- * （fps=4/时长 + tile=2x2），时长未知时按 10 秒估。返回 JPEG Buffer；ffmpeg 缺失/转换失败返回 null。
++ * 视频 → 一组 JPEG 九宫格。
++ * 短视频默认一张 3×3；视觉信息密集时可分两段各抽一张，共 18 帧。
++ * 所有帧在服务器本地由 ffmpeg 抽取，不消耗额外视觉服务积分。
+  */
+-export async function convertVideoToFrameStrip(buffer, signal) {
++export async function convertVideoToFrameStrips(buffer, signal, {
++  framesPerStrip = 9,
++  columns = 3,
++  width = 320,
++  segments = 1,
++  durationSeconds = 0
++} = {}) {
+   const ffmpegPath = await resolveFfmpeg();
+-  if (!ffmpegPath) return null;
++  if (!ffmpegPath) return [];
+   try {
+-    const probed = await probeVideoSeconds(ffmpegPath, buffer, signal);
++    const probed = Number(durationSeconds) > 0
++      ? Number(durationSeconds)
++      : await probeVideoSeconds(ffmpegPath, buffer, signal);
+     const seconds = probed > 0 ? probed : 10;
+-    const rate = 4 / Math.max(1, Math.min(600, seconds));   // 整段均匀 4 帧；超长视频也只看开头这段里的 4 帧
+-    const vf = `fps=${rate.toFixed(6)},scale=320:-2,tile=2x2`;
+-    const jpeg = await runFfmpeg(ffmpegPath, buffer, vf, signal);
+-    return jpeg?.length ? jpeg : null;
++    const count = Math.max(1, Math.min(3, Math.round(Number(segments) || 1)));
++    const span = seconds / count;
++    const strips = [];
++    for (let index = 0; index < count; index += 1) {
++      signal?.throwIfAborted();
++      const start = index * span;
++      const vf = videoStripVf({
++        seconds,
++        start,
++        span,
++        frames: framesPerStrip,
++        columns,
++        width
++      });
++      const jpeg = await runFfmpeg(ffmpegPath, buffer, vf, signal);
++      if (!jpeg?.length) return [];
++      strips.push({
++        buffer: jpeg,
++        start,
++        end: Math.min(seconds, start + span)
++      });
++    }
++    return strips;
+   } catch (error) {
+     // 中止（用户取消/运行超时）要原样抛出去：吞成 null 会让上层报"需要可用的 ffmpeg/ffprobe"，
+     // 把排查方向指错（服务器上明明装了）（2026-09-26 审查 P2）
+     if (signal?.aborted) throw error;
+-    return null;
++    return [];
+   }
+ }
+ 
++/** 兼容旧调用：默认仍返回一张 2×2。 */
++export async function convertVideoToFrameStrip(buffer, signal, options = {}) {
++  const strips = await convertVideoToFrameStrips(buffer, signal, {
++    framesPerStrip: 4,
++    columns: 2,
++    width: 320,
++    segments: 1,
++    ...options
++  });
++  return strips[0]?.buffer || null;
++}
++
+ export async function convertGifToStillStrip(buffer, signal) {
+   const ffmpegPath = await resolveFfmpeg();
+   if (!ffmpegPath) return null;
+diff --git a/src/tools/tools-core.js b/src/tools/tools-core.js
+index 52d3136..53a658f 100644
+--- a/src/tools/tools-core.js
++++ b/src/tools/tools-core.js
+@@ -3114,23 +3114,23 @@ export function buildToolDefs() {
+     },
+     {
+       name: 'inspect_video_link',
+-      description: '读取 B 站、YouTube 或抖音视频链接。默认 mode=quick：优先字幕，没有字幕就转写音轨，返回标题、简介和内容材料；只有用户明确问画面、动作、人物外形或视觉细节时，才把 includeFrames 设为 true。YouTube 本地直连失败且已配置 BiliNote 时，会自动回退在线解析并消耗积分。mode=deep 主动调用 BiliNote 在线精读服务，'
++      description: '读取 B 站、YouTube 或抖音视频链接。默认 mode=auto：3 分钟内本地读取并自动抽 1~2 张九宫格看画面；超过 3 分钟优先 BiliNote 精读。mode=quick 强制本地，mode=deep 强制 BiliNote。视觉型评论会自动要求画面，不需要模型自己判断；特殊情况下仍可用 includeFrames=true 兜底。复用的最近结果不会重复消耗积分。'
+         + (biliNoteConfigured()
+-          ? '当前已配置，会消耗账户积分，而且可能等待一两分钟；只有用户明确要求“详细笔记/认真分析整个视频”才使用。'
++          ? '当前 BiliNote 已配置，长视频可能等待一两分钟并消耗账户积分。'
+           : '当前未配置 API Key，会回退本地模式。'),
+       parameters: {
+         type: 'object',
+         properties: {
+           url: { type: 'string', description: 'B 站、YouTube 或抖音视频链接；也支持 b23.tv 短链、BV/av 号或包含链接的分享文本' },
+-          mode: { type: 'string', enum: ['quick', 'deep'], description: 'quick=本地字幕/转写；deep=BiliNote 在线详细精读，消耗积分' },
+-          includeFrames: { type: 'boolean', description: '用户明确问画面/动作/视觉细节时设为 true；普通问“讲了什么”不要开' }
++          mode: { type: 'string', enum: ['auto', 'quick', 'deep'], description: 'auto=按 3 分钟时长自动路由；quick=强制本地；deep=强制 BiliNote' },
++          includeFrames: { type: 'boolean', description: '视觉意图兜底；auto 模式下短视频本来就会自动抽帧' }
+         },
+         required: ['url']
+       },
+       async execute(ctx, args) {
+         try {
+           const result = await inspectVideoLink(String(args.url ?? ''), ctx, {
+-            mode: args.mode === 'deep' ? 'deep' : 'quick',
++            mode: args.mode === 'deep' ? 'deep' : args.mode === 'quick' ? 'quick' : 'auto',
+             includeFrames: args.includeFrames === true,
+             signal: ctx.signal
+           });
+@@ -3142,6 +3142,8 @@ export function buildToolDefs() {
+             ? '[BiliNote 仍在后台处理，尚未完成。不要把任务状态说成已经看完，也不要自行补全内容。]\n'
+             : videoStatus === 'local'
+               ? '[本地视频材料（非 BiliNote 深读）。]\n'
++              : result.source === 'bilinote-cache'
++                ? '[复用最近 7 天已完成的 BiliNote 结果，本次未重复消耗积分。]\n'
+               : result.source === 'bilinote-fallback'
+                 ? '[BiliNote 已完成；这是本地直连失败后的在线回退结果。]\n'
+                 : '[BiliNote 已完成。]\n';
+diff --git a/src/tools/video-link.js b/src/tools/video-link.js
+index d10609c..017a72c 100644
+--- a/src/tools/video-link.js
++++ b/src/tools/video-link.js
+@@ -9,7 +9,7 @@ import { DATA_DIR } from '../core/config.js';
+ import { sanitizeUserText } from '../core/util.js';
+ import { safeFetch, safeFetchBinary } from '../llm/safe-fetch.js';
+ import { transcribeAudioFile } from './audio-transcribe.js';
+-import { convertVideoToFrameStrip } from './image-downsample.js';
++import { convertVideoToFrameStrips } from './image-downsample.js';
+ 
+ const BILI_HOSTS = new Set(['bilibili.com', 'www.bilibili.com', 'm.bilibili.com', 'b23.tv', 'www.b23.tv']);
+ const YOUTUBE_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be']);
+@@ -30,6 +30,10 @@ const MAX_TRANSCRIPT_CHARS = 40_000;
+ const MAX_DESCRIPTION_CHARS = 1_200;
+ const MAX_AUDIO_SECONDS = 300;
+ const MAX_VISUAL_SECONDS = 360;
++const AUTO_DEEP_SECONDS = 180;
++const ADVANCED_DEEP_SECONDS = 20 * 60;
++const BILINOTE_MONTHLY_BUDGET = 900;
++const BILINOTE_CACHE_TTL_MS = 7 * 86400000;
+ const MAX_AUDIO_BYTES = 80 * 1024 * 1024;
+ const MAX_VIDEO_BYTES = 96 * 1024 * 1024;
+ const YTDLP_BIN = process.env.QQ_AGENT_YTDLP_BIN || '/mnt/data/qq-agent/bin/yt-dlp';
+@@ -37,6 +41,8 @@ const BILINOTE_KEY_FILE = process.env.QQ_AGENT_BILINOTE_API_KEY_FILE
+   || path.join(DATA_DIR, 'bilinote-api-key');
+ const BILINOTE_API_BASE = String(process.env.QQ_AGENT_BILINOTE_API_BASE
+   || 'https://www.bilinote.net/api').replace(/\/+$/, '');
++const BILINOTE_USAGE_FILE = path.join(DATA_DIR, 'bilinote-usage.json');
++const VIDEO_CACHE_FILE = path.join(DATA_DIR, 'video-note-cache.json');
+ const MIXIN_KEY_ENC_TAB = [
+   46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35,
+   27, 43, 5, 49, 33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13,
+@@ -63,6 +69,7 @@ const VIDEO_URL_IN_TEXT = /(?<![A-Za-z0-9.-])(?:https?:\/\/)?(?:[\w-]+\.)*(?:bil
+ const BILINOTE_ADVANCED_INTENT = /(?:数据|统计|图表|财报|经济|金融|计算|测算|公式|算法|研究|论文|课程|复盘|趋势|宏观|微观|对比|建模|指标|可视化)/i;
+ const NON_VIDEO_MEDIA = /(?:图(?:片|像)?|照片|表情|封面|文章|帖子|网页)/;
+ const EXPLICIT_VIDEO_CONTEXT = /(?:视频|B站|bilibili|链接|上一条|刚才那条|这期)/i;
++const VISUAL_VIDEO_INTENT = /(?:画面|镜头|动作|表情|字幕|这段|这里|看这个|你看|中土大战|这谁|什么梗|发生什么|在干嘛|怎么打|打架|战斗|换脸|合成)/i;
+ 
+ /** 只检查本轮触发消息，决定是否强制视频工具进入 deep 模式。 */
+ export function hasDeepVideoIntent(triggerEntries) {
+@@ -76,6 +83,34 @@ export function hasDeepVideoIntent(triggerEntries) {
+   });
+ }
+ 
++/** 评论本身是否依赖画面。只要命中画面、动作、字幕或具体视觉梗，就不能只读音轨。 */
++export function hasVisualVideoIntent(triggerEntries) {
++  return (Array.isArray(triggerEntries) ? triggerEntries : []).some((message) => {
++    if (message?.self) return false;
++    const text = String(message?.text || '').trim();
++    return Boolean(text) && VISUAL_VIDEO_INTENT.test(text);
++  });
++}
++
++/**
++ * 抽查帧计划：3 分钟内默认一张 3×3；画面型视频分两段，各一张 3×3。
++ * 极短视频只给一张，避免 18 帧几乎全是同一画面。
++ */
++export function framePlanForVideo(durationSeconds, { visual = false, fallback = false } = {}) {
++  const seconds = Math.max(0, Number(durationSeconds) || 0);
++  if (!seconds || (seconds > AUTO_DEEP_SECONDS && (!fallback || seconds > MAX_VISUAL_SECONDS))) return [];
++  const segments = (visual || fallback) && seconds >= 45 ? 2 : 1;
++  const span = seconds / segments;
++  return Array.from({ length: segments }, (_, index) => ({
++    index,
++    start: index * span,
++    end: Math.min(seconds, (index + 1) * span),
++    frames: 9,
++    columns: 3,
++    width: 320
++  }));
++}
++
+ function messageText(value) {
+   if (typeof value === 'string') return value;
+   if (!value || typeof value !== 'object' || (value.role && value.role !== 'user')) return '';
+@@ -107,16 +142,29 @@ export function applyDeepVideoIntent(args, triggerEntries, recentMessages = [])
+   return { ...args, ...(url ? { url } : {}), mode: 'deep' };
+ }
+ 
+-/** 需要强推理的深读任务优先选择更高质量的 BiliNote 模型。 */
+-export function biliNoteNeedsAdvancedModel(triggerEntries) {
++/** 调度层兜底：有视频就自动选模式，视觉型评论自动要求画面。 */
++export function applyVideoIntent(args, triggerEntries, recentMessages = []) {
++  if (!args || typeof args !== 'object' || Array.isArray(args)) return args;
++  const url = String(args.url || '').trim() || findRecentVideoLink(recentMessages);
++  const deep = hasDeepVideoIntent(triggerEntries);
++  return {
++    ...args,
++    ...(url ? { url } : {}),
++    ...(args.mode ? {} : { mode: deep ? 'deep' : 'auto' }),
++    ...(hasVisualVideoIntent(triggerEntries) ? { includeFrames: true } : {})
++  };
++}
++
++/** 超过 20 分钟，或复杂数据任务才使用高级 BiliNote 模型。 */
++export function biliNoteNeedsAdvancedModel(triggerEntries, durationSeconds = 0) {
+   const text = (Array.isArray(triggerEntries) ? triggerEntries : [])
+     .map((entry) => String(entry?.text || ''))
+     .join('\n');
+-  return hasDeepVideoIntent(triggerEntries) && BILINOTE_ADVANCED_INTENT.test(text);
++  return Number(durationSeconds) >= ADVANCED_DEEP_SECONDS
++    || (hasDeepVideoIntent(triggerEntries) && BILINOTE_ADVANCED_INTENT.test(text));
+ }
+ 
+-/** 在账号可用的非 VIP 模型中，默认选最便宜，复杂任务选最高档。 */
+-export function selectBiliNoteModel(models, {
++function selectBiliNoteModelEntry(models, {
+   advanced = false,
+   preferred = '',
+   advancedPreferred = '',
+@@ -129,15 +177,111 @@ export function selectBiliNoteModel(models, {
+   const candidates = advanced
+     ? eligible.filter((item) => Number.isFinite(modelCost(item)) && modelCost(item) <= ceiling)
+     : eligible;
+-  if (!candidates.length) return '';
++  if (!candidates.length) return null;
+   const byName = new Map(candidates.map((item) => [modelName(item), item]).filter(([name]) => name));
+   const preferredName = String(preferred || '').trim();
+-  if (preferredName && byName.has(preferredName)) return preferredName;
++  if (preferredName && byName.has(preferredName)) return byName.get(preferredName);
+   const ordered = [...candidates].sort((a, b) => modelCost(a) - modelCost(b));
+-  if (!advanced) return modelName(ordered[0]);
++  if (!advanced) return ordered[0];
+   const advancedName = String(advancedPreferred || '').trim();
+-  if (advancedName && byName.has(advancedName)) return advancedName;
+-  return modelName(ordered.at(-1));
++  if (advancedName && byName.has(advancedName)) return byName.get(advancedName);
++  return ordered.at(-1);
++}
++
++/** 在账号可用的非 VIP 模型中，默认选最便宜，复杂任务选最高档。 */
++export function selectBiliNoteModel(models, options = {}) {
++  return modelName(selectBiliNoteModelEntry(models, options));
++}
++
++function readJsonFile(file, fallback) {
++  try {
++    const value = JSON.parse(fs.readFileSync(file, 'utf8'));
++    return value && typeof value === 'object' ? value : fallback;
++  } catch {
++    return fallback;
++  }
++}
++
++function writeJsonFile(file, value) {
++  const tmp = `${file}.${process.pid}.tmp`;
++  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
++  fs.writeFileSync(tmp, JSON.stringify(value, null, 2), { mode: 0o600, flush: true });
++  fs.renameSync(tmp, file);
++  fs.chmodSync(file, 0o600);
++}
++
++function shanghaiMonthKey(now = Date.now()) {
++  const parts = new Intl.DateTimeFormat('en-US', {
++    timeZone: 'Asia/Shanghai',
++    year: 'numeric',
++    month: '2-digit'
++  }).formatToParts(new Date(now));
++  const year = parts.find((part) => part.type === 'year')?.value || '';
++  const month = parts.find((part) => part.type === 'month')?.value || '';
++  return `${year}-${month}`;
++}
++
++function biliNoteBudget(cost) {
++  const limit = Math.max(1, Number(process.env.QQ_AGENT_BILINOTE_MONTHLY_BUDGET) || BILINOTE_MONTHLY_BUDGET);
++  const ledger = readJsonFile(BILINOTE_USAGE_FILE, {});
++  const month = shanghaiMonthKey();
++  const current = ledger.month === month ? Number(ledger.creditsUsed) || 0 : 0;
++  return {
++    limit,
++    month,
++    used: current,
++    cost: Math.max(0, Number(cost) || 0),
++    allowed: current + Math.max(0, Number(cost) || 0) <= limit
++  };
++}
++
++function recordBiliNoteUsage({ month, cost, model, url, taskId = '', status = 'submitted' }) {
++  const ledger = readJsonFile(BILINOTE_USAGE_FILE, {});
++  const current = ledger.month === month ? Number(ledger.creditsUsed) || 0 : 0;
++  const entries = Array.isArray(ledger.entries) ? ledger.entries.slice(-199) : [];
++  entries.push({
++    at: Date.now(),
++    cost: Math.max(0, Number(cost) || 0),
++    model: String(model || ''),
++    urlHash: videoCacheKey(url),
++    taskId: String(taskId || ''),
++    status
++  });
++  writeJsonFile(BILINOTE_USAGE_FILE, {
++    month,
++    creditsUsed: current + Math.max(0, Number(cost) || 0),
++    entries
++  });
++}
++
++function videoCacheKey(url) {
++  return crypto.createHash('sha256').update(String(url || '')).digest('hex').slice(0, 32);
++}
++
++function readVideoCache(url) {
++  const cache = readJsonFile(VIDEO_CACHE_FILE, {});
++  const hit = cache[videoCacheKey(url)];
++  if (!hit || Number(hit.expiresAt) <= Date.now() || !hit.text) return null;
++  return hit;
++}
++
++function writeVideoCache(url, result) {
++  const cache = readJsonFile(VIDEO_CACHE_FILE, {});
++  const now = Date.now();
++  for (const [key, value] of Object.entries(cache)) {
++    if (!value || Number(value.expiresAt) <= now) delete cache[key];
++  }
++  cache[videoCacheKey(url)] = {
++    text: String(result.text || ''),
++    model: String(result.model || ''),
++    taskId: String(result.taskId || ''),
++    createdAt: now,
++    expiresAt: now + BILINOTE_CACHE_TTL_MS
++  };
++  const kept = Object.entries(cache)
++    .sort((a, b) => Number(b[1]?.createdAt) - Number(a[1]?.createdAt))
++    .slice(0, 80);
++  writeJsonFile(VIDEO_CACHE_FILE, Object.fromEntries(kept));
+ }
+ 
+ export function videoPlatformOf(url) {
+@@ -498,7 +642,7 @@ function subtitleText(title, page, data, transcript, source) {
+   });
+ }
+ 
+-async function inspectWithYtdlp(url, ctx, { includeFrames = false, signal } = {}) {
++async function inspectWithYtdlp(url, ctx, { mode = 'auto', includeFrames = false, signal } = {}) {
+   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-video-link-'));
+   try {
+     const metaRun = await runYtdlp([
+@@ -515,6 +659,32 @@ async function inspectWithYtdlp(url, ctx, { includeFrames = false, signal } = {}
+     if (info.is_live) throw new Error('直播视频暂不支持');
+     const duration = Number(info.duration || 0);
+     const notes = [];
++    const wantsDeep = mode === 'deep' || (mode === 'auto' && duration > AUTO_DEEP_SECONDS);
++    let deepFallback = false;
++    if (wantsDeep && biliNoteConfigured()) {
++      try {
++        const note = await generateBiliNote(url, signal, videoPlatformOf(url), {
++          advanced: biliNoteNeedsAdvancedModel(ctx?.triggerEntries, duration),
++          durationSeconds: duration
++        });
++        return {
++          text: sanitizeUserText(String(note.text || '').slice(0, MAX_TRANSCRIPT_CHARS)),
++          frameDataUrls: [],
++          taskId: note.taskId,
++          biliNoteModel: note.model,
++          source: note.cached ? 'bilinote-cache' : (note.pending ? 'bilinote-pending' : 'bilinote'),
++          pending: note.pending === true
++        };
++      } catch (error) {
++        error.biliNoteAttempted = true;
++        if (mode === 'deep') throw error;
++        deepFallback = true;
++        notes.push(`BiliNote 深读不可用，已降级本地读取：${String(error?.message ?? error)}`);
++      }
++    } else if (wantsDeep) {
++      deepFallback = true;
++      notes.push(`视频超过 ${AUTO_DEEP_SECONDS / 60} 分钟，但 BiliNote 未配置，已降级本地读取`);
++    }
+     let transcript = await ytdlpSubtitles(url, info, workDir, signal).catch((error) => {
+       notes.push(`字幕读取失败：${String(error?.message ?? error)}`);
+       return '';
+@@ -544,10 +714,14 @@ async function inspectWithYtdlp(url, ctx, { includeFrames = false, signal } = {}
+     }
+ 
+     const frameDataUrls = [];
+-    if (includeFrames) {
++    const localFrames = includeFrames || mode === 'auto' || deepFallback;
++    const framePlan = localFrames
++      ? framePlanForVideo(duration, { visual: hasVisualVideoIntent(ctx?.triggerEntries), fallback: deepFallback })
++      : [];
++    if (localFrames) {
+       if (duration > MAX_VISUAL_SECONDS) {
+         notes.push(`视频超过 ${MAX_VISUAL_SECONDS / 60} 分钟，未自动抽取画面`);
+-      } else {
++      } else if (framePlan.length) {
+         try {
+           await runYtdlp([
+             '--no-playlist', '--no-warnings', '--socket-timeout', '20', '--retries', '1',
+@@ -557,10 +731,22 @@ async function inspectWithYtdlp(url, ctx, { includeFrames = false, signal } = {}
+           ], { signal, timeoutMs: 120_000 });
+           const videoPath = findDownloadedFile(workDir, 'video.');
+           if (!videoPath) throw new Error('yt-dlp 没有生成视频文件');
+-          const strip = await convertVideoToFrameStrip(fs.readFileSync(videoPath), signal);
+-          if (!strip?.length) throw new Error('视频抽帧失败');
+-          frameDataUrls.push(`data:image/jpeg;base64,${strip.toString('base64')}`);
+-          notes.push('画面来自视频按时间顺序抽取的 4 帧四宫格');
++          const strips = await convertVideoToFrameStrips(fs.readFileSync(videoPath), signal, {
++            framesPerStrip: 9,
++            columns: 3,
++            width: 320,
++            segments: framePlan.length,
++            durationSeconds: duration
++          });
++          if (!strips.length) throw new Error('视频抽帧失败');
++          for (let index = 0; index < strips.length; index += 1) {
++            const item = strips[index];
++            frameDataUrls.push(`data:image/jpeg;base64,${item.buffer.toString('base64')}`);
++            notes.push(
++              `画面第 ${index + 1} 张：${Math.floor(item.start / 60)}:${String(Math.floor(item.start % 60)).padStart(2, '0')}`
++              + `–${Math.floor(item.end / 60)}:${String(Math.floor(item.end % 60)).padStart(2, '0')}，按时间顺序 3×3 九宫格`
++            );
++          }
+         } catch (error) {
+           notes.push(`画面读取失败：${String(error?.message ?? error)}`);
+         }
+@@ -636,14 +822,31 @@ function modelCost(item) {
+   return Number.isFinite(n) ? n : Number.POSITIVE_INFINITY;
+ }
+ 
+-async function generateBiliNote(url, signal, platform = 'BILIBILI', { advanced = false } = {}) {
++async function generateBiliNote(url, signal, platform = 'BILIBILI', { advanced = false, durationSeconds = 0 } = {}) {
++  const cached = readVideoCache(url);
++  if (cached) {
++    return {
++      text: cached.text,
++      taskId: cached.taskId,
++      model: cached.model,
++      pending: false,
++      cached: true
++    };
++  }
+   const models = modelRows(await biliNoteApi('/v1/models', { signal }));
+-  const model = selectBiliNoteModel(models, {
++  const selected = selectBiliNoteModelEntry(models, {
+     advanced,
+     preferred: process.env.QQ_AGENT_BILINOTE_MODEL,
+     advancedPreferred: process.env.QQ_AGENT_BILINOTE_MODEL_ADVANCED
+   });
++  const model = modelName(selected);
+   if (!model) throw new Error('BiliNote 没有返回可用模型');
++  const cost = modelCost(selected);
++  const budget = biliNoteBudget(cost);
++  if (!Number.isFinite(cost)) throw new Error('BiliNote 模型没有返回积分价格');
++  if (!budget.allowed) {
++    throw new Error(`BiliNote 本月额度保护已触发（${budget.used}/${budget.limit}，本次需要 ${cost}）`);
++  }
+   const task = await biliNoteApi('/v1/notes/generate', {
+     method: 'POST',
+     signal,
+@@ -656,6 +859,14 @@ async function generateBiliNote(url, signal, platform = 'BILIBILI', { advanced =
+   });
+   const taskId = String(task?.taskId || task?.task_id || '').trim();
+   if (!taskId) throw new Error('BiliNote 没有返回任务 ID');
++  recordBiliNoteUsage({
++    month: budget.month,
++    cost,
++    model,
++    url,
++    taskId,
++    status: 'submitted'
++  });
+   const deadline = Date.now() + 120_000;
+   let delay = 3000;
+   while (Date.now() < deadline) {
+@@ -663,12 +874,15 @@ async function generateBiliNote(url, signal, platform = 'BILIBILI', { advanced =
+     const status = await biliNoteApi(`/v1/tasks/${encodeURIComponent(taskId)}`, { signal });
+     if (String(status?.status || '').toUpperCase() === 'SUCCESS' && status?.noteId) {
+       const note = await biliNoteApi(`/v1/notes/${encodeURIComponent(status.noteId)}`, { signal });
+-      return {
++      const result = {
+         text: String(note?.content || '').slice(0, MAX_TRANSCRIPT_CHARS),
+         taskId,
+         model,
+-        pending: false
++        pending: false,
++        durationSeconds
+       };
++      writeVideoCache(url, result);
++      return result;
+     }
+     if (String(status?.status || '').toUpperCase() === 'FAILED') {
+       throw new Error(status?.errorMessage || 'BiliNote 生成失败');
+@@ -686,9 +900,10 @@ async function generateBiliNote(url, signal, platform = 'BILIBILI', { advanced =
+ 
+ /**
+  * 读取一个 B 站视频链接。
+- * mode=quick：本地取字幕/音轨；mode=deep：有 BiliNote Key 时走在线精读。
++ * mode=auto：3 分钟内本地看画面，超过 3 分钟优先 BiliNote；
++ * mode=quick：强制本地；mode=deep：强制 BiliNote（不可用时降级本地）。
+  */
+-export async function inspectVideoLink(input, ctx, { mode = 'quick', includeFrames = false, signal = ctx?.signal } = {}) {
++export async function inspectVideoLink(input, ctx, { mode = 'auto', includeFrames = false, signal = ctx?.signal } = {}) {
+   if (activeJobs >= 1) throw new Error('另一个视频链接正在处理中，请稍后再试');
+   activeJobs += 1;
+   let workDir = '';
+@@ -696,33 +911,20 @@ export async function inspectVideoLink(input, ctx, { mode = 'quick', includeFram
+     let normalized = normalizeVideoLink(input);
+     const platform = videoPlatformOf(normalized);
+     if (!platform) throw new Error('暂不支持这个视频平台');
+-    const advancedNote = biliNoteNeedsAdvancedModel(ctx?.triggerEntries);
+-    if (mode === 'deep' && biliNoteConfigured()) {
+-      const result = await generateBiliNote(normalized, signal, platform, { advanced: advancedNote });
+-      return {
+-        text: sanitizeUserText(result.text),
+-        frameDataUrls: [],
+-        taskId: result.taskId,
+-        biliNoteModel: result.model,
+-        source: result.pending ? 'bilinote-pending' : 'bilinote',
+-        pending: result.pending
+-      };
+-    }
+     if (platform !== 'BILIBILI') {
+       let result;
+       try {
+-        result = await inspectWithYtdlp(normalized, ctx, { includeFrames, signal });
++        result = await inspectWithYtdlp(normalized, ctx, { mode, includeFrames, signal });
+       } catch (error) {
+-        if (mode !== 'quick' || !biliNoteConfigured()) throw error;
+-        result = await generateBiliNote(normalized, signal, platform, { advanced: advancedNote });
++        if (mode === 'quick' || !biliNoteConfigured() || error?.biliNoteAttempted) throw error;
++        result = await generateBiliNote(normalized, signal, platform, {
++          advanced: biliNoteNeedsAdvancedModel(ctx?.triggerEntries, 0)
++        });
+         result.text = `服务器本地直连失败，已回退 BiliNote 在线解析（消耗账户积分）。\n${result.text}`;
+       }
+-      if (mode === 'deep') {
+-        result.text += '\n注意：BiliNote 在线精读未配置 API Key，已回退 yt-dlp 本地模式';
+-      }
+       return {
+         ...result,
+-        source: result.taskId ? 'bilinote-fallback' : 'local'
++        source: result.source || (result.taskId ? 'bilinote-fallback' : 'local')
+       };
+     }
+     const headers = await bilibiliHeaders(signal);
+@@ -730,8 +932,6 @@ export async function inspectVideoLink(input, ctx, { mode = 'quick', includeFram
+     const { bvid, aid } = bilibiliIds(normalized);
+     if (!bvid && !aid) throw new Error('未能从链接中解析出 BV/av 号');
+ 
+-    const deepFallback = mode === 'deep' && !biliNoteConfigured();
+-
+     const view = await bilibiliJson(
+       BILI_VIEW_API,
+       bvid ? { bvid } : { aid },
+@@ -752,6 +952,30 @@ export async function inspectVideoLink(input, ctx, { mode = 'quick', includeFram
+     const cid = Number(page?.cid || data.cid || 0);
+     if (!cid) throw new Error('B 站视频没有返回分 P 信息');
+     const duration = Number(page?.duration || data.duration || 0);
++    const notes = [];
++    const wantsDeep = mode === 'deep' || (mode === 'auto' && duration > AUTO_DEEP_SECONDS);
++    if (wantsDeep && biliNoteConfigured()) {
++      try {
++        const result = await generateBiliNote(normalized, signal, platform, {
++          advanced: biliNoteNeedsAdvancedModel(ctx?.triggerEntries, duration),
++          durationSeconds: duration
++        });
++        return {
++          text: sanitizeUserText(result.text),
++          frameDataUrls: [],
++          taskId: result.taskId,
++          biliNoteModel: result.model,
++          source: result.cached ? 'bilinote-cache' : (result.pending ? 'bilinote-pending' : 'bilinote'),
++          pending: result.pending
++        };
++      } catch (error) {
++        if (mode === 'deep') throw error;
++        notes.push(`BiliNote 深读不可用，已降级本地读取：${String(error?.message ?? error)}`);
++      }
++    } else if (wantsDeep) {
++      notes.push(`视频超过 ${AUTO_DEEP_SECONDS / 60} 分钟，但 BiliNote 未配置，已降级本地读取`);
++    }
++    const deepFallback = wantsDeep;
+ 
+     const subtitle = await fetchSubtitles(bvid, aid, cid, headers, signal).catch((error) => ({
+       text: '',
+@@ -760,8 +984,7 @@ export async function inspectVideoLink(input, ctx, { mode = 'quick', includeFram
+     }));
+     let transcript = subtitle.text;
+     let transcriptSource = subtitle.text ? `B站字幕 ${subtitle.language || ''}`.trim() : '';
+-    const notes = [];
+-    if (deepFallback) notes.push('BiliNote 在线精读未配置 API Key，已回退本地模式');
++    if (deepFallback && !notes.length) notes.push('BiliNote 在线精读未完成，已回退本地模式');
+     if (subtitle.note) notes.push(`字幕读取失败：${subtitle.note}`);
+ 
+     if (!transcript) {
+@@ -791,10 +1014,14 @@ export async function inspectVideoLink(input, ctx, { mode = 'quick', includeFram
+     }
+ 
+     const frameDataUrls = [];
+-    if (includeFrames) {
++    const localFrames = includeFrames || mode === 'auto' || deepFallback;
++    const framePlan = localFrames
++      ? framePlanForVideo(duration, { visual: hasVisualVideoIntent(ctx?.triggerEntries), fallback: deepFallback })
++      : [];
++    if (localFrames) {
+       if (duration > MAX_VISUAL_SECONDS) {
+         notes.push(`视频超过 ${MAX_VISUAL_SECONDS / 60} 分钟，未自动抽取画面`);
+-      } else {
++      } else if (framePlan.length) {
+         try {
+           const play = await fetchPlayInfo({ url: normalized, bvid, aid, cid, headers, signal });
+           if (!play.videoUrl) throw new Error('B 站没有返回可下载视频画面');
+@@ -804,10 +1031,22 @@ export async function inspectVideoLink(input, ctx, { mode = 'quick', includeFram
+             signal,
+             { headers: { referer: BILI_HEADERS.referer, 'user-agent': BILI_USER_AGENT } }
+           );
+-          const strip = await convertVideoToFrameStrip(video.buffer, signal);
+-          if (!strip?.length) throw new Error('视频抽帧失败');
+-          frameDataUrls.push(`data:image/jpeg;base64,${strip.toString('base64')}`);
+-          notes.push('画面来自视频按时间顺序抽取的 4 帧四宫格');
++          const strips = await convertVideoToFrameStrips(video.buffer, signal, {
++            framesPerStrip: 9,
++            columns: 3,
++            width: 320,
++            segments: framePlan.length,
++            durationSeconds: duration
++          });
++          if (!strips.length) throw new Error('视频抽帧失败');
++          for (let index = 0; index < strips.length; index += 1) {
++            const item = strips[index];
++            frameDataUrls.push(`data:image/jpeg;base64,${item.buffer.toString('base64')}`);
++            notes.push(
++              `画面第 ${index + 1} 张：${Math.floor(item.start / 60)}:${String(Math.floor(item.start % 60)).padStart(2, '0')}`
++              + `–${Math.floor(item.end / 60)}:${String(Math.floor(item.end % 60)).padStart(2, '0')}，按时间顺序 3×3 九宫格`
++            );
++          }
+         } catch (error) {
+           notes.push(`画面读取失败：${String(error?.message ?? error)}`);
+         }
+diff --git a/test/video-link.test.mjs b/test/video-link.test.mjs
+index 14d8f08..fd8c524 100644
+--- a/test/video-link.test.mjs
++++ b/test/video-link.test.mjs
+@@ -7,11 +7,14 @@ import path from 'node:path';
+ process.env.QQ_AGENT_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-video-link-'));
+ const {
+   applyDeepVideoIntent,
++  applyVideoIntent,
+   bilibiliPageNumber,
+   biliNoteNeedsAdvancedModel,
+   findRecentVideoLink,
++  framePlanForVideo,
+   formatSubtitleBody,
+   hasDeepVideoIntent,
++  hasVisualVideoIntent,
+   normalizeBilibiliLink,
+   normalizeVideoLink,
+   parseWebVtt,
+@@ -66,6 +69,25 @@ test('“详细看看/完整笔记/认真看完”强制 deep，普通看看和
+   assert.equal(hasDeepVideoIntent([{ text: '帮我详细分析这个视频', self: true }]), false);
+ });
+ 
++test('视频自动路由：短视频九宫格，视觉型两批，长视频不浪费抽帧', () => {
++  assert.deepEqual(framePlanForVideo(30), [
++    { index: 0, start: 0, end: 30, frames: 9, columns: 3, width: 320 }
++  ]);
++  assert.deepEqual(framePlanForVideo(90, { visual: true }), [
++    { index: 0, start: 0, end: 45, frames: 9, columns: 3, width: 320 },
++    { index: 1, start: 45, end: 90, frames: 9, columns: 3, width: 320 }
++  ]);
++  assert.deepEqual(framePlanForVideo(181, { visual: true }), []);
++  assert.equal(framePlanForVideo(181, { fallback: true }).length, 2);
++  assert.deepEqual(framePlanForVideo(361, { fallback: true }), []);
++  assert.equal(hasVisualVideoIntent([{ text: '中土大战' }]), true);
++  assert.equal(hasVisualVideoIntent([{ text: '看看这个画面和字幕' }]), true);
++  assert.equal(hasVisualVideoIntent([{ text: '这首歌挺好听' }]), false);
++  assert.equal(applyVideoIntent({ url: 'https://b23.tv/x' }, [{ text: '中土大战' }]).includeFrames, true);
++  assert.equal(applyVideoIntent({ url: 'https://b23.tv/x' }, [{ text: '中土大战' }]).mode, 'auto');
++  assert.equal(applyVideoIntent({ url: 'https://b23.tv/x' }, [{ text: '详细分析这个视频' }]).mode, 'deep');
++});
++
+ test('无链接的详细追问能绑定最近一条视频', () => {
+   const recent = [
+     { role: 'assistant', content: '上一条回答' },
+@@ -103,6 +125,8 @@ test('数据密集型 BiliNote 任务选择更高档模型，普通深读仍选
+   assert.equal(selectBiliNoteModel(models, { advanced: true, advancedPreferred: 'GPT' }), 'Doubao');
+   assert.equal(biliNoteNeedsAdvancedModel([{ text: '详细分析这个视频里的经济数据和图表' }]), true);
+   assert.equal(biliNoteNeedsAdvancedModel([{ text: '详细分析这个视频' }]), false);
++  assert.equal(biliNoteNeedsAdvancedModel([{ text: '看看这个视频' }], 20 * 60), true);
++  assert.equal(biliNoteNeedsAdvancedModel([{ text: '看看这个视频' }], 20 * 60 - 1), false);
+   assert.equal(hasDeepVideoIntent([{ text: '你详细说说今天的计划' }]), false);
+   assert.equal(hasDeepVideoIntent([{ text: '认真研究这道题' }]), false);
+   assert.equal(hasDeepVideoIntent([{ text: '你详细看看这张图' }]), false);
+@@ -164,13 +188,15 @@ test('WebVTT 字幕去掉标签、去重并保留时间戳', () => {
+   assert.equal(text, '[00:01] 你好\n[01:05] 下一句');
+ });
+ 
+-test('工具表暴露 inspect_video_link，且普通模式默认不抽帧', () => {
++test('工具表暴露 inspect_video_link，并说明自动路由与九宫格', () => {
+   const tool = buildToolDefs().find((item) => item.name === 'inspect_video_link');
+   assert.ok(tool, 'inspect_video_link 必须可用');
+   assert.deepEqual(tool.parameters.required, ['url']);
+   assert.equal(tool.parameters.properties.includeFrames.type, 'boolean');
+-  assert.match(tool.description, /默认 mode=quick/);
++  assert.match(tool.description, /默认 mode=auto/);
+   assert.match(tool.description, /includeFrames/);
++  assert.deepEqual(tool.parameters.properties.mode.enum, ['auto', 'quick', 'deep']);
++  assert.match(tool.description, /九宫格/);
+   assert.match(tool.description, /YouTube/);
+   assert.match(tool.description, /抖音/);
+ });
