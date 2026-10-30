@@ -5,7 +5,7 @@
 面向 Linux 服务器的 QQ 群聊机器人部署与运维记录：运行环境、运维手册、踩坑记录与人设文本。
 
 [![License](https://img.shields.io/badge/license-MIT-3da639.svg)](LICENSE)
-[![qq-agent-plus](https://img.shields.io/badge/qq--agent--plus-v0.9.11-blue)](https://github.com/sakurawwwxh/qq-agent-plus)
+[![qq-agent-plus](https://img.shields.io/badge/qq--agent--plus-v0.9.13-blue)](https://github.com/sakurawwwxh/qq-agent-plus)
 [![Platform](https://img.shields.io/badge/platform-Linux-0b5fff?logo=linux&logoColor=white)](#运行环境)
 [![Protocol](https://img.shields.io/badge/protocol-OneBot%20v11-12b7f5)](https://github.com/botuniverse/onebot-11)
 [![LLM](https://img.shields.io/badge/LLM-DeepSeek-6b4fbb)](https://platform.deepseek.com)
@@ -25,7 +25,7 @@
 **仓库性质**：个人自用记录，与所涉任何公司或项目均无关联；欢迎通过 Issue 提出问题、错误纠正与改进意见。
 第三方权利归属与致谢见 [NOTICE.md](NOTICE.md)，授权条款见 [LICENSE](LICENSE)。
 
-部署日期：2026-09-21　|　最后更新：2026-10-27
+部署日期：2026-09-21　|　最后更新：2026-10-30
 
 ## 敏感信息说明
 
@@ -154,11 +154,11 @@ QQ 群  ⇄  SnowLuma 容器（OneBot 协议端）
 
 ## 当前状态
 
-截至 2026-10-27，机器人**已切换到主动模式、以保守档运行**（2026-10-12 启用；起步把响应概率收紧到 0%，先观察风控）：
+截至 2026-10-30，机器人**已切换到主动模式、以保守档运行**（2026-10-12 启用；起步把响应概率收紧到 0%，先观察风控）：
 
 | 项目 | 状态 |
 |---|---|
-| 程序版本 | `qq-agent-plus` v0.9.11（2026-10-27 升级） |
+| 程序版本 | `qq-agent-plus` v0.9.13（2026-10-30 升级） |
 | 协议端 | `motricseven7/snowluma:v1.14.22`（2026-10-09 升级） |
 | 机器人账号 | `<BOT_QQ>`，注册于 2026-09-21 |
 | 风控记录 | 2026-09-22、09-23 两次被平台限制功能，均通过身份验证恢复 |
