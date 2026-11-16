@@ -5,7 +5,7 @@
 面向 Linux 服务器的 QQ 群聊机器人部署与运维记录：运行环境、运维手册、踩坑记录与人设文本。
 
 [![License](https://img.shields.io/badge/license-MIT-3da639.svg)](LICENSE)
-[![qq-agent-plus](https://img.shields.io/badge/qq--agent--plus-v0.9.13-blue)](https://github.com/sakurawwwxh/qq-agent-plus)
+[![qq-agent-plus](https://img.shields.io/badge/qq--agent--plus-v0.9.16-blue)](https://github.com/sakurawwwxh/qq-agent-plus)
 [![Platform](https://img.shields.io/badge/platform-Linux-0b5fff?logo=linux&logoColor=white)](#运行环境)
 [![Protocol](https://img.shields.io/badge/protocol-OneBot%20v11-12b7f5)](https://github.com/botuniverse/onebot-11)
 [![LLM](https://img.shields.io/badge/LLM-DeepSeek-6b4fbb)](https://platform.deepseek.com)
@@ -25,7 +25,7 @@
 **仓库性质**：个人自用记录，与所涉任何公司或项目均无关联；欢迎通过 Issue 提出问题、错误纠正与改进意见。
 第三方权利归属与致谢见 [NOTICE.md](NOTICE.md)，授权条款见 [LICENSE](LICENSE)。
 
-部署日期：2026-09-21　|　最后更新：2026-10-30
+部署日期：2026-09-21　|　最后更新：2026-11-16
 
 ## 敏感信息说明
 
@@ -154,18 +154,18 @@ QQ 群  ⇄  SnowLuma 容器（OneBot 协议端）
 
 ## 当前状态
 
-截至 2026-10-30，机器人**已切换到主动模式、以保守档运行**（2026-10-12 启用；起步把响应概率收紧到 0%，先观察风控）：
+截至 2026-11-16，机器人以主动模式运行，普通群消息响应概率为 60%；补话关闭，自主节奏关闭：
 
 | 项目 | 状态 |
 |---|---|
-| 程序版本 | `qq-agent-plus` v0.9.13（2026-10-30 升级） |
+| 程序版本 | `qq-agent-plus` v0.9.16（2026-11-16 升级） |
 | 协议端 | `motricseven7/snowluma:v1.14.22`（2026-10-09 升级） |
 | 机器人账号 | `<BOT_QQ>`，注册于 2026-09-21 |
 | 风控记录 | 2026-09-22、09-23 两次被平台限制功能，均通过身份验证恢复 |
 | 机器人服务 | 运行中（`active`），运行模式 `active`（2026-10-12 启用） |
 | 协议端容器 | 运行中，**已登录**（2026-10-09 扫码） |
 | 语音 | 自建 GPT-SoVITS（本机）+ SSH 反向隧道，私聊可发；本机不开机时退回打字 |
-| 后续计划 | 保守档观察风控；稳定后按阶梯提高响应概率 |
+| 后续计划 | 继续观察运行与平台风险；按实际需要调整响应和主动功能 |
 
 使用第三方协议端登录 QQ 可能被平台判定为异常，进而限制账号功能。该风险由部署者
 自行承担。相关内容见 NOTICE.md 的「风险与合规提示」。
@@ -198,14 +198,16 @@ curl -sS -m 10 -H "authorization: Bearer $T" -H 'content-type: application/json'
 | 模型与温度 | `deepseek-chat`，温度 1.1 |
 | 人设 | 角色卡约 6.3 千字（21 岁大学生设定），附加规则约 2.9 千字 |
 | 交流策略 / 参与度 | `legacy`（原版群友）/ medium |
-| 响应概率 | 0%（保守档；被 @ / 命中关键词 / 私聊直回，普通群消息暂不触发） |
+| 响应概率 | 60%（普通群消息；被 @ / 命中关键词 / 私聊仍为必回） |
 | 消息节奏 | 思考等待 **10～15 秒**，分条间隔 **5～8 秒**，单轮通常 1 条、最多 2 条 |
 | 发送闸门 | 每分钟 15 条 / 每小时 180 条（防模型抽风，平时碰不到） |
 | 自主节奏 `pacing` | **关闭**（2026-10-15）：它会隔一段时间自己醒过来补话，与"只在有人聊且接得上时开口"冲突 |
 | 对话模式 | `lifecycle`（统一会话生命周期） |
 | 时间控制 | 启用（模式 `always`，全天开放），夜间由人设规则约束 |
-| 每日动态 / 动态互动 | **关闭** |
-| 主动找话 | 冷场开话题 关闭；补话 关闭；自安排唤醒 关闭（`pacing` 也已关闭，全靠被 @ / 关键词 / 私聊触发） |
+| 每日动态 / 动态互动 | **开启** |
+| 主动找话 | 冷场开话题、补话、自安排唤醒均关闭；普通群消息按 60% 概率进入处理 |
+| 群内周期功能 | 群日报、群见闻、群游戏关闭；周期提醒开启 |
+| 长期记忆 | 开启影子模式，仅 1 个群；人物记忆按会话隔离，私聊内容不在群里显示 |
 | 扩展能力 | 语音回复（TTS，自建）、语音转文字（ASR）、图片生成、多模态上下文试点 开启；API 预算每日 3 元 |
 | 成员认知 | 印象行带 QQ 号（服务器侧本地补丁，见运维手册第三节） |
 | 表情自动收藏 | 开启（每小时不超过 20 张）；判定标准自定义（`sticker.collectCriteria`），备注上限 24 → 40 字（本地补丁）；两者内容见 [patches/README.md](patches/README.md)，v0.8.5 起控制台可直接编辑 |

@@ -6,7 +6,7 @@ Deployment and operations notes for a QQ group chat bot on Linux: runtime enviro
 operations manual, troubleshooting notes and persona text.
 
 [![License](https://img.shields.io/badge/license-MIT-3da639.svg)](LICENSE)
-[![qq-agent-plus](https://img.shields.io/badge/qq--agent--plus-v0.9.13-blue)](https://github.com/sakurawwwxh/qq-agent-plus)
+[![qq-agent-plus](https://img.shields.io/badge/qq--agent--plus-v0.9.16-blue)](https://github.com/sakurawwwxh/qq-agent-plus)
 [![Platform](https://img.shields.io/badge/platform-Linux-0b5fff?logo=linux&logoColor=white)](#runtime-environment)
 [![Protocol](https://img.shields.io/badge/protocol-OneBot%20v11-12b7f5)](https://github.com/botuniverse/onebot-11)
 [![LLM](https://img.shields.io/badge/LLM-DeepSeek-6b4fbb)](https://platform.deepseek.com)
@@ -30,7 +30,7 @@ project mentioned here. Issues, corrections and suggestions are welcome. See
 [NOTICE.md](NOTICE.md) for third-party rights and acknowledgements, and
 [LICENSE](LICENSE) for the licensing terms.
 
-Deployed: 2026-09-21　|　Last updated: 2026-10-30
+Deployed: 2026-09-21　|　Last updated: 2026-11-16
 
 ## Sensitive Information
 
@@ -175,18 +175,18 @@ Deployment order and the responsibilities of each layer are described in section
 
 ## Current Status
 
-As of 2026-10-30 the bot runs in **active mode on a conservative preset** (enabled on 2026-10-12; the response probability is pinned at 0% while platform risk is watched):
+As of 2026-11-16 the bot runs in active mode with a 60% response probability for ordinary group messages; follow-up replies and pacing are disabled:
 
 | Item | Status |
 |---|---|
-| Program version | `qq-agent-plus` v0.9.13 (upgraded on 2026-10-30) |
+| Program version | `qq-agent-plus` v0.9.16 (upgraded on 2026-11-16) |
 | Protocol client | `motricseven7/snowluma:v1.14.22` (upgraded on 2026-10-09) |
 | Bot account | `<BOT_QQ>`, registered on 2026-09-21 |
 | Platform restrictions | Function-limited twice (2026-09-22 and 09-23); both restored via identity verification |
 | Bot service | Running (`active`), runtime mode `active` (enabled on 2026-10-12) |
 | Protocol container | Running, **logged in** (QR scan on 2026-10-09) |
 | Voice | Self-hosted GPT-SoVITS on this PC behind an SSH reverse tunnel (private chats only); falls back to text when the PC is off |
-| Next step | Keep the conservative preset while watching platform risk; raise the response probability step by step once stable |
+| Next step | Keep observing runtime and platform risk, and adjust response or proactive features as needed |
 
 Logging into QQ with a third-party protocol client may be treated as abnormal by the
 platform and can lead to account restrictions. That risk is borne by the person running
@@ -222,14 +222,16 @@ For intermediate checks and error handling, see section 6 of the
 | Model and temperature | `deepseek-chat`, temperature 1.1 |
 | Persona | Role card ≈ 6.3k characters (21-year-old university student), additional rules ≈ 2.9k characters |
 | Behaviour profile / participation | `legacy` (original group-member style) / medium |
-| Response probability | 0% (conservative preset; always replies to mentions, keyword hits and private chats, ordinary group messages do not trigger yet) |
+| Response probability | 60% for ordinary group messages; mentions, keyword hits and private chats always trigger |
 | Message pacing | Thinking delay **10–15 s**, **5–8 s** between split messages, usually 1 message per turn, at most 2 |
 | Send throttle | 15 messages/minute and 180 messages/hour (a guard against runaway output; normal chat never reaches it) |
 | Autonomous pacing `pacing` | **Disabled** (2026-10-15): it made the bot wake up on its own and add a line, which conflicts with "only speak when others are talking and it fits" |
 | Conversation mode | `lifecycle` (unified session lifecycle) |
 | Time control | Enabled (`always`); night-time behaviour is constrained by the persona rules |
-| Daily moments / Qzone interactions | **Disabled** |
-| Self-initiated talk | Cold-start topics off; follow-up off; self-scheduled wake-up off (and `pacing` is off too, so everything is driven by mentions, keywords and private chats) |
+| Daily moments / Qzone interactions | **Enabled** |
+| Self-initiated talk | Cold-start topics, follow-up replies, self-scheduled wake-up and autonomous pacing are disabled; ordinary group messages trigger with a 60% probability |
+| Scheduled group features | Group digest, life feed and group games are disabled; recurring reminders are enabled |
+| Long-term memory | Enabled in shadow mode for one group; person memory is scoped per chat, and private material is hidden in group context |
 | Extended features | Voice replies (TTS, self-hosted), speech-to-text (ASR), image generation and the multimodal context pilot enabled; API budget capped at ¥3/day |
 | Member recognition | Impression lines carry the QQ number (local server-side patch; see section 3 of the operations manual) |
 | Sticker auto-collection | Enabled (at most 20 per hour); collection criteria customised via `sticker.collectCriteria`, and the note length cap raised from 24 to 40 characters by a local patch (see [patches/README.md](patches/README.md); editable from the console since v0.8.5) |
